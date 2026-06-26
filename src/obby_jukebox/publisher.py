@@ -173,6 +173,7 @@ class Publisher:
                 await self._wake.wait()
                 self._wake.clear()
                 continue
+            logger.info("resolving: %s", item.url)
             try:
                 resolved = await asyncio.to_thread(
                     resolve, item.url, self.s.ytdlp_cookies

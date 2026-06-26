@@ -24,6 +24,9 @@ async def _run() -> None:
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # aiortc/aioice log every RTP packet at DEBUG, which buries app logs.
+    for noisy in ("aiortc", "aioice", "av", "libav"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     playlist = Playlist(maxlen=settings.max_queue)
     irc = IrcClient(
