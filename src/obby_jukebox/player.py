@@ -3,6 +3,9 @@ that consumes these lives in `publisher.py` (it owns the WebRTC senders)."""
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -64,10 +67,20 @@ def resolve(url: str, cookies: str = "") -> Resolved:
         "noplaylist": True,
         "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
     }
-    if cookies:
-        opts["cookiefile"] = cookies
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    tmp_cookies = ""
+    if cookies and os.path.exists(cookies):
+        # yt-dlp rewrites the cookiefile on close; the mounted secret is
+        # read-only, so work on a writable copy.
+        fd, tmp_cookies = tempfile.mkstemp(suffix="-cookies.txt")
+        os.close(fd)
+        shutil.copyfile(cookies, tmp_cookies)
+        opts["cookiefile"] = tmp_cookies
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    finally:
+        if tmp_cookies:
+            os.unlink(tmp_cookies)
     return Resolved(
         media_url=info["url"],
         title=info.get("title", url),

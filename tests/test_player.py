@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,16 +43,37 @@ def test_queue_full():
         pl.add("u3")
 
 
+def _fake_ydl(info, captured=None):
+    def make(opts):
+        if captured is not None:
+            cf = opts.get("cookiefile")
+            captured["cookiefile"] = cf
+            captured["content"] = Path(cf).read_text() if cf else None
+        m = MagicMock()
+        m.__enter__.return_value.extract_info.return_value = info
+        return m
+
+    return make
+
+
 def test_resolve_uses_ytdlp():
-    fake = MagicMock()
-    fake.__enter__.return_value.extract_info.return_value = {
-        "url": "https://cdn/stream.mp4",
-        "title": "Cool Video",
-        "is_live": False,
-    }
-    with patch("obby_jukebox.player.yt_dlp.YoutubeDL", return_value=fake) as ydl:
-        out = resolve("https://youtu.be/x", cookies="/c.txt")
+    info = {"url": "https://cdn/stream.mp4", "title": "Cool Video", "is_live": False}
+    with patch("obby_jukebox.player.yt_dlp.YoutubeDL", side_effect=_fake_ydl(info)):
+        out = resolve("https://youtu.be/x")
     assert out.media_url == "https://cdn/stream.mp4"
     assert out.title == "Cool Video"
     assert out.is_live is False
-    assert ydl.call_args.args[0]["cookiefile"] == "/c.txt"
+
+
+def test_resolve_copies_readonly_cookies_to_writable_temp(tmp_path):
+    src = tmp_path / "ro.txt"
+    src.write_text("COOKIEDATA")
+    captured: dict[str, object] = {}
+    info = {"url": "u", "title": "t", "is_live": False}
+    with patch(
+        "obby_jukebox.player.yt_dlp.YoutubeDL",
+        side_effect=_fake_ydl(info, captured),
+    ):
+        resolve("https://x", cookies=str(src))
+    assert captured["cookiefile"] != str(src)  # a copy, not the read-only mount
+    assert captured["content"] == "COOKIEDATA"
