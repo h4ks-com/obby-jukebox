@@ -3,7 +3,9 @@ streams the playlist into one persistent video+audio sender pair.
 
 aiortc gathers ICE into the SDP (non-trickle), so the offer carries our
 candidates; we still accept the SFU's trickled candidates. Queue items are
-swapped with `sender.replaceTrack` so changing video needs no renegotiation.
+swapped by switching the source of one persistent, format-normalized track
+pair, so changing video needs no renegotiation and the encoder never sees a
+format change.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.contrib.media import MediaPlayer
-from aiortc.mediastreams import AudioStreamTrack, VideoStreamTrack
 from aiortc.sdp import candidate_from_sdp
 from yt_dlp.utils import DownloadError
 
@@ -33,6 +34,7 @@ from obby_jukebox.signaling import (
     encode_signal,
     parse_rtc_tag,
 )
+from obby_jukebox.tracks import JukeboxAudioTrack, JukeboxVideoTrack
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +50,8 @@ class Publisher:
         self._skip = asyncio.Event()
         self._wake = asyncio.Event()
         self._pc: RTCPeerConnection | None = None
-        self._audio_sender: object | None = None
-        self._video_sender: object | None = None
+        self._audio: JukeboxAudioTrack | None = None
+        self._video: JukeboxVideoTrack | None = None
         self._media_started = False
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -125,8 +127,12 @@ class Publisher:
             )
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
         self._pc = pc
-        self._audio_sender = pc.addTrack(AudioStreamTrack())
-        self._video_sender = pc.addTrack(VideoStreamTrack())
+        self._audio = JukeboxAudioTrack()
+        self._video = JukeboxVideoTrack(
+            self.s.video_width, self.s.video_height, self.s.video_fps
+        )
+        pc.addTrack(self._audio)
+        pc.addTrack(self._video)
         await pc.setLocalDescription(await pc.createOffer())
         self._send({"type": "offer", "sdp": pc.localDescription.sdp})
         if not self._media_started:
@@ -159,10 +165,10 @@ class Publisher:
         await self._pc.addIceCandidate(candidate)
 
     def _set_idle(self) -> None:
-        if self._video_sender is not None:
-            self._video_sender.replaceTrack(VideoStreamTrack())  # type: ignore[attr-defined]
-        if self._audio_sender is not None:
-            self._audio_sender.replaceTrack(AudioStreamTrack())  # type: ignore[attr-defined]
+        if self._audio is not None:
+            self._audio.clear_source()
+        if self._video is not None:
+            self._video.clear_source()
 
     async def _media_loop(self) -> None:
         while True:
@@ -188,10 +194,10 @@ class Publisher:
                 logger.warning("open failed for %s: %s", item.title, e)
                 continue
             logger.info("now playing: %s", item.title)
-            if self._video_sender is not None and source.video is not None:
-                self._video_sender.replaceTrack(source.video)  # type: ignore[attr-defined]
-            if self._audio_sender is not None and source.audio is not None:
-                self._audio_sender.replaceTrack(source.audio)  # type: ignore[attr-defined]
+            if self._audio is not None and source.audio is not None:
+                self._audio.set_source(source.audio)
+            if self._video is not None and source.video is not None:
+                self._video.set_source(source.video)
             self._send({"type": "video", "state": "on"})
             await self._await_end(source)
 
