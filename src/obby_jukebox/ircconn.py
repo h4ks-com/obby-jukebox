@@ -42,6 +42,7 @@ class IrcClient:
         self._writer: asyncio.StreamWriter | None = None
         self._reader: asyncio.StreamReader | None = None
         self._want: set[str] = set()
+        self._caps_ls: set[str] = set()
 
     async def connect(self) -> None:
         ctx = ssl.create_default_context() if self.tls else None
@@ -67,8 +68,9 @@ class IrcClient:
             raw = await self._reader.readline()
             if not raw:
                 raise ConnectionError("server closed the connection")
-            line = tokenise(raw.decode("utf-8", "replace").rstrip("\r\n"))
-            self._handle(line)
+            text = raw.decode("utf-8", "replace").rstrip("\r\n")
+            logger.debug("<< %s", text)
+            self._handle(tokenise(text))
 
     def _handle(self, line: Line) -> None:
         cmd = (line.command or "").upper()
@@ -80,6 +82,9 @@ class IrcClient:
             self._handle_authenticate(line)
         elif cmd in ("903", "904", "905", "906", "907"):
             self.send_raw("CAP END")
+        elif cmd == "433":  # nick in use during registration
+            self.nick = self.nick + "_"
+            self.send_raw(f"NICK {self.nick}")
         elif cmd == "001":
             self.registered.set()
         elif cmd == "JOIN" and line.source:
@@ -94,7 +99,10 @@ class IrcClient:
     def _handle_cap(self, line: Line) -> None:
         sub = line.params[1].upper() if len(line.params) > 1 else ""
         if sub == "LS":
-            available = set(line.params[-1].split())
+            self._caps_ls |= set(line.params[-1].split())
+            if len(line.params) > 3 and line.params[2] == "*":
+                return  # multiline CAP LS continuation
+            available = self._caps_ls
             wanted = [c for c in self.caps if c in available]
             if self.sasl_user and "sasl" in available:
                 wanted.append("sasl")
