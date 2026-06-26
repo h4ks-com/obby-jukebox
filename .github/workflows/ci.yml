@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+
+      - name: Sync
+        run: uv sync --frozen
+
+      - name: pre-commit (ruff + mypy)
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: ""
+
+      - name: Tests
+        run: uv run pytest
