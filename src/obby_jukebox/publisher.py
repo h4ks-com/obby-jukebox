@@ -127,6 +127,16 @@ class Publisher:
             )
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
         self._pc = pc
+        logger.info("joined %s; negotiating webrtc", self.channel)
+
+        @pc.on("connectionstatechange")
+        def _conn_state() -> None:
+            logger.info("pc connection=%s", pc.connectionState)
+
+        @pc.on("iceconnectionstatechange")
+        def _ice_state() -> None:
+            logger.info("pc ice=%s", pc.iceConnectionState)
+
         self._audio = JukeboxAudioTrack()
         self._video = JukeboxVideoTrack(
             self.s.video_width, self.s.video_height, self.s.video_fps
@@ -134,7 +144,12 @@ class Publisher:
         pc.addTrack(self._audio)
         pc.addTrack(self._video)
         await pc.setLocalDescription(await pc.createOffer())
-        self._send({"type": "offer", "sdp": pc.localDescription.sdp})
+        offer_lines = encode_signal(
+            self.channel, {"type": "offer", "sdp": pc.localDescription.sdp}
+        )
+        logger.info("sending offer in %d tagmsg chunk(s)", len(offer_lines))
+        for line in offer_lines:
+            self.irc.send_raw(line)
         if not self._media_started:
             self._media_started = True
             self._spawn(self._media_loop())
@@ -142,6 +157,7 @@ class Publisher:
     async def _on_answer(self, sig: Signal) -> None:
         if self._pc is None:
             return
+        logger.info("answer received; applying remote description")
         await self._pc.setRemoteDescription(
             RTCSessionDescription(sdp=sig["sdp"], type="answer")
         )
