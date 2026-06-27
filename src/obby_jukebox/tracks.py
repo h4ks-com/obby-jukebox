@@ -2,17 +2,20 @@
 output format. Swapping queue items via ``replaceTrack`` otherwise makes
 aiortc's encoder resampler see a format change and raise "Frame does not match
 AudioResampler setup"; keeping one track whose output format never changes
-avoids that. When no source is set the track emits silence / black, paced in
-real time so the connection stays alive between items."""
+avoids that. When no source is set the track emits silence / a static fallback
+card, paced in real time so the bot keeps streaming (and holding the streamer
+slot) between items."""
 
 from __future__ import annotations
 
 import asyncio
 import fractions
+import os
 
 import av
 from aiortc import MediaStreamTrack
 from aiortc.mediastreams import MediaStreamError
+from PIL import Image, ImageDraw
 
 _AUDIO_RATE = 48000
 _AUDIO_LAYOUT = "stereo"
@@ -74,7 +77,13 @@ class JukeboxAudioTrack(MediaStreamTrack):
 class JukeboxVideoTrack(MediaStreamTrack):
     kind = "video"
 
-    def __init__(self, width: int = 1280, height: int = 720, fps: int = 30) -> None:
+    def __init__(
+        self,
+        width: int = 1280,
+        height: int = 720,
+        fps: int = 30,
+        idle_image: str = "",
+    ) -> None:
         super().__init__()
         self._source: MediaStreamTrack | None = None
         self._width = width
@@ -82,6 +91,9 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._step = _VIDEO_CLOCK // fps
         self._frame_time = 1 / fps
         self._pts = 0
+        # Static fallback shown whenever the queue is empty, so the channel is
+        # never a black/empty tile and the bot keeps holding the streamer slot.
+        self._idle = _fallback_frame(width, height, idle_image)
 
     def set_source(self, track: MediaStreamTrack) -> None:
         self._source = track
@@ -104,7 +116,7 @@ class JukeboxVideoTrack(MediaStreamTrack):
                 )
         if frame is None:
             await asyncio.sleep(self._frame_time)
-            frame = _black_frame(self._width, self._height)
+            frame = self._idle
         frame.pts = self._pts
         frame.time_base = fractions.Fraction(1, _VIDEO_CLOCK)
         self._pts += self._step
@@ -121,8 +133,20 @@ def _silent_frame() -> av.AudioFrame:
     return frame
 
 
-def _black_frame(width: int, height: int) -> av.VideoFrame:
-    frame = av.VideoFrame(width=width, height=height, format="yuv420p")
-    for plane in frame.planes:
-        plane.update(bytes(plane.buffer_size))
-    return frame
+def _fallback_frame(width: int, height: int, image_path: str = "") -> av.VideoFrame:
+    """A static 'idle' card: a custom image if given, else a generated banner."""
+    if image_path and os.path.exists(image_path):
+        img = Image.open(image_path).convert("RGB").resize((width, height))
+    else:
+        img = Image.new("RGB", (width, height), (16, 18, 24))
+        draw = ImageDraw.Draw(img)
+        cx, cy = width // 2, height // 2
+        draw.text((cx, cy - 16), "obby-jukebox", anchor="mm", fill=(235, 235, 235))
+        draw.text(
+            (cx, cy + 16),
+            "nothing playing — queue with .vplay <url>",
+            anchor="mm",
+            fill=(150, 150, 160),
+        )
+    frame: av.VideoFrame = av.VideoFrame.from_image(img)  # type: ignore[no-untyped-call]
+    return frame.reformat(format="yuv420p")

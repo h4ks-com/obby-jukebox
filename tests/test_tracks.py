@@ -9,8 +9,8 @@ def test_silent_frame_format():
     assert f.samples == 960
 
 
-def test_black_frame_format():
-    f = tracks._black_frame(640, 360)
+def test_fallback_frame_format():
+    f = tracks._fallback_frame(640, 360)
     assert (f.width, f.height) == (640, 360)
     assert f.format.name == "yuv420p"
 
@@ -24,7 +24,7 @@ async def test_audio_track_emits_silence_without_source():
     assert nxt.pts == frame.samples  # pts stays monotonic
 
 
-async def test_video_track_emits_black_without_source():
+async def test_video_track_emits_fallback_without_source():
     track = JukeboxVideoTrack(320, 240, fps=30)
     frame = await track.recv()
     assert (frame.width, frame.height) == (320, 240)

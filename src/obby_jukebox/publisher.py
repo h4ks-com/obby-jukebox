@@ -139,7 +139,10 @@ class Publisher:
 
         self._audio = JukeboxAudioTrack()
         self._video = JukeboxVideoTrack(
-            self.s.video_width, self.s.video_height, self.s.video_fps
+            self.s.video_width,
+            self.s.video_height,
+            self.s.video_fps,
+            idle_image=self.s.idle_image,
         )
         pc.addTrack(self._audio)
         pc.addTrack(self._video)
@@ -150,6 +153,9 @@ class Publisher:
         logger.info("sending offer in %d tagmsg chunk(s)", len(offer_lines))
         for line in offer_lines:
             self.irc.send_raw(line)
+        # Always-on: the fallback card streams immediately, so clients render a
+        # tile even before anything is queued.
+        self._send({"type": "video", "state": "on"})
         if not self._media_started:
             self._media_started = True
             self._spawn(self._media_loop())
