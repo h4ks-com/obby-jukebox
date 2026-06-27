@@ -6,10 +6,13 @@ messages are ignored so it can never trigger itself.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Protocol
 
 from obby_jukebox.player import Playlist, QueueFull
+
+logger = logging.getLogger(__name__)
 
 _QUEUE_PREVIEW = 5
 
@@ -37,6 +40,7 @@ class CommandHandler:
 
     def on_message(self, sender: str, target: str, text: str) -> None:
         if target != self.channel:
+            logger.debug("ignoring non-channel message to %s", target)
             return
         if sender.casefold() == self.irc.nick.casefold():
             return
@@ -45,6 +49,7 @@ class CommandHandler:
             return
         cmd = parts[0][1:].casefold()
         arg = parts[1].strip() if len(parts) > 1 else ""
+        logger.info("command from %s: .%s %s", sender, cmd, arg)
         if cmd == "play":
             self._play(arg)
         elif cmd == "skip":
