@@ -34,6 +34,8 @@ class Signal(TypedDict, total=False):
     state: str
     turn: TurnConfig
     error: str
+    role: str
+    member: str
     # SDP chunking
     id: str
     seq: int

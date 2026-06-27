@@ -56,6 +56,7 @@ class Publisher:
         self._media_started = False
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending_ice: list[Signal] = []
+        self._role = ""
 
     def wake(self) -> None:
         self._wake.set()
@@ -117,6 +118,8 @@ class Publisher:
                 await self._on_renegotiate(sig)
             elif kind == "ice":
                 await self._on_ice(sig)
+            elif kind == "role":
+                await self._on_role(sig)
             elif kind == "error":
                 logger.error("signaling error: %s", sig.get("error"))
         except (ValueError, OSError) as e:
@@ -137,7 +140,14 @@ class Publisher:
             )
         pc = RTCPeerConnection(RTCConfiguration(iceServers=ice))
         self._pc = pc
-        logger.info("joined %s; negotiating webrtc", self.channel)
+        self._role = sig.get("role") or "streamer"
+        logger.info("joined %s as %s; negotiating webrtc", self.channel, self._role)
+        if self._role != "streamer":
+            logger.warning(
+                "joined %s as viewer (someone else holds the streamer slot); "
+                "our tracks are dropped until they leave and we're promoted",
+                self.channel,
+            )
 
         @pc.on("connectionstatechange")
         def _conn_state() -> None:
@@ -205,6 +215,28 @@ class Publisher:
         candidate.sdpMid = sig.get("mid")
         candidate.sdpMLineIndex = sig.get("mlineidx")
         await self._pc.addIceCandidate(candidate)
+
+    async def _on_role(self, sig: Signal) -> None:
+        if sig.get("member", "").casefold() != self.irc.nick.casefold():
+            return
+        if sig.get("role") == "streamer" and self._role != "streamer":
+            logger.info("promoted to streamer; re-publishing")
+            self._role = "streamer"
+            await self._republish()
+
+    async def _republish(self) -> None:
+        """Re-join so the SFU ingests our tracks as a streamer. Tracks we sent
+        while a viewer were dropped, and a promotion alone won't re-trigger
+        ingestion, so we leave and rejoin to renegotiate from a clean slate."""
+        old = self._pc
+        self._pc = None
+        self._pending_ice.clear()
+        with contextlib.suppress(RuntimeError):
+            self._send({"type": "leave", "channel": self.channel})
+        if old is not None:
+            await old.close()
+        await asyncio.sleep(0.5)
+        self._send({"type": "join", "channel": self.channel})
 
     def _set_idle(self) -> None:
         if self._audio is not None:
