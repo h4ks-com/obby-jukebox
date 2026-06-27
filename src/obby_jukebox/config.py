@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     voice_channel: str = "$youtube"
 
-    stun_url: str = "stun:stun.l.google.com:19302"
+    stun_url: str = "stun:coturn.h4ks.com:3478"
 
     ytdlp_cookies: str = ""  # path to a cookies.txt, optional
 

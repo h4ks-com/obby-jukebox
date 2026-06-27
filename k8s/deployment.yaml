@@ -44,6 +44,8 @@ spec:
               value: jukebox
             - name: VOICE_CHANNEL
               value: "$jukebox"
+            - name: STUN_URL
+              value: stun:coturn.h4ks.com:3478
             - name: YTDLP_COOKIES
               value: /cookies/cookies.txt
             - name: HTTP_PORT
