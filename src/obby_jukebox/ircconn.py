@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import ssl
 from collections.abc import Callable
@@ -61,6 +62,10 @@ class IrcClient:
 
     def join(self, channel: str) -> None:
         self.send_raw(f"JOIN {channel}")
+
+    def quit(self, message: str = "") -> None:
+        with contextlib.suppress(RuntimeError):
+            self.send_raw(f"QUIT :{message}")
 
     async def run(self) -> None:
         assert self._reader is not None

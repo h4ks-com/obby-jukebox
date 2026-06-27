@@ -11,6 +11,7 @@ format change.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Coroutine
 
@@ -61,6 +62,14 @@ class Publisher:
 
     def skip(self) -> None:
         self._skip.set()
+
+    async def stop(self) -> None:
+        """Leave the channel + close the PC so the SFU drops our peer cleanly,
+        instead of lingering as a ghost streamer until the IRCd pings it out."""
+        with contextlib.suppress(RuntimeError):
+            self._send({"type": "leave", "channel": self.channel})
+        if self._pc is not None:
+            await self._pc.close()
 
     def _spawn(self, coro: Coroutine[object, object, None]) -> None:
         task = asyncio.ensure_future(coro)

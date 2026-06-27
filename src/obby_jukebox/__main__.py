@@ -5,7 +5,9 @@ the orchestrator restarts the single pod."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import signal
 
 import uvicorn
 
@@ -51,10 +53,27 @@ async def _run() -> None:
     )
 
     await irc.connect()
-    async with asyncio.TaskGroup() as tg:
-        tg.create_task(irc.run())
-        tg.create_task(publisher.start())
-        tg.create_task(server.serve())
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+
+    tasks = [
+        asyncio.create_task(irc.run()),
+        asyncio.create_task(publisher.start()),
+        asyncio.create_task(server.serve()),
+    ]
+    await asyncio.wait(
+        [asyncio.create_task(stop.wait()), *tasks],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    await publisher.stop()
+    irc.quit("shutting down")
+    await asyncio.sleep(0.5)  # flush QUIT before the socket closes
+    for task in tasks:
+        task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.gather(*tasks)
 
 
 def main() -> None:
