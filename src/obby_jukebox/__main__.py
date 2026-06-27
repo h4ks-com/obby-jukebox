@@ -12,6 +12,7 @@ import signal
 import uvicorn
 
 from obby_jukebox.api import create_app
+from obby_jukebox.commands import CommandHandler
 from obby_jukebox.config import Settings
 from obby_jukebox.ircconn import IrcClient
 from obby_jukebox.player import Playlist
@@ -41,6 +42,9 @@ async def _run() -> None:
         caps=VOICE_CAPS,
     )
     publisher = Publisher(irc, settings, playlist)
+    irc.on_message = CommandHandler(
+        irc, playlist, settings.voice_channel, publisher.wake, publisher.skip
+    ).on_message
 
     app = create_app(playlist, publisher.wake, publisher.skip, api_key=settings.api_key)
     server = uvicorn.Server(

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 TagMsgHandler = Callable[[str, str, dict[str, str | None]], None]
 JoinHandler = Callable[[str, str], None]
+MessageHandler = Callable[[str, str, str], None]
 
 
 class IrcClient:
@@ -40,6 +41,7 @@ class IrcClient:
         self.registered = asyncio.Event()
         self.on_tagmsg: TagMsgHandler | None = None
         self.on_join: JoinHandler | None = None
+        self.on_message: MessageHandler | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader: asyncio.StreamReader | None = None
         self._want: set[str] = set()
@@ -62,6 +64,9 @@ class IrcClient:
 
     def join(self, channel: str) -> None:
         self.send_raw(f"JOIN {channel}")
+
+    def privmsg(self, target: str, text: str) -> None:
+        self.send_raw(f"PRIVMSG {target} :{text}")
 
     def quit(self, message: str = "") -> None:
         with contextlib.suppress(RuntimeError):
@@ -100,6 +105,11 @@ class IrcClient:
             target = line.params[0] if line.params else ""
             if self.on_tagmsg:
                 self.on_tagmsg(line.hostmask.nickname, target, dict(line.tags or {}))
+        elif cmd == "PRIVMSG" and line.source:
+            target = line.params[0] if line.params else ""
+            text = line.params[1] if len(line.params) > 1 else ""
+            if self.on_message:
+                self.on_message(line.hostmask.nickname, target, text)
 
     def _handle_cap(self, line: Line) -> None:
         sub = line.params[1].upper() if len(line.params) > 1 else ""

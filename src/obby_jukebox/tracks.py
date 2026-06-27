@@ -145,7 +145,7 @@ def _idle_image(width: int, height: int, image_path: str = "") -> Image.Image:
     draw.text((cx, cy - 16), "obby-jukebox", anchor="mm", fill=(235, 235, 235))
     draw.text(
         (cx, cy + 16),
-        "nothing playing — queue with .vplay <url>",
+        "nothing playing — queue with .play <url>",
         anchor="mm",
         fill=(150, 150, 160),
     )
