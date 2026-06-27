@@ -93,7 +93,9 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._pts = 0
         # Static fallback shown whenever the queue is empty, so the channel is
         # never a black/empty tile and the bot keeps holding the streamer slot.
-        self._idle = _fallback_frame(width, height, idle_image)
+        # Kept as a PIL image so each recv() builds a fresh frame (reusing one
+        # frame and mutating its pts in place can corrupt the encoder).
+        self._idle_image = _idle_image(width, height, idle_image)
 
     def set_source(self, track: MediaStreamTrack) -> None:
         self._source = track
@@ -116,7 +118,7 @@ class JukeboxVideoTrack(MediaStreamTrack):
                 )
         if frame is None:
             await asyncio.sleep(self._frame_time)
-            frame = self._idle
+            frame = _frame_from_image(self._idle_image)
         frame.pts = self._pts
         frame.time_base = fractions.Fraction(1, _VIDEO_CLOCK)
         self._pts += self._step
@@ -133,20 +135,23 @@ def _silent_frame() -> av.AudioFrame:
     return frame
 
 
-def _fallback_frame(width: int, height: int, image_path: str = "") -> av.VideoFrame:
-    """A static 'idle' card: a custom image if given, else a generated banner."""
+def _idle_image(width: int, height: int, image_path: str = "") -> Image.Image:
+    """The static 'idle' card: a custom image if given, else a generated banner."""
     if image_path and os.path.exists(image_path):
-        img = Image.open(image_path).convert("RGB").resize((width, height))
-    else:
-        img = Image.new("RGB", (width, height), (16, 18, 24))
-        draw = ImageDraw.Draw(img)
-        cx, cy = width // 2, height // 2
-        draw.text((cx, cy - 16), "obby-jukebox", anchor="mm", fill=(235, 235, 235))
-        draw.text(
-            (cx, cy + 16),
-            "nothing playing — queue with .vplay <url>",
-            anchor="mm",
-            fill=(150, 150, 160),
-        )
+        return Image.open(image_path).convert("RGB").resize((width, height))
+    img = Image.new("RGB", (width, height), (16, 18, 24))
+    draw = ImageDraw.Draw(img)
+    cx, cy = width // 2, height // 2
+    draw.text((cx, cy - 16), "obby-jukebox", anchor="mm", fill=(235, 235, 235))
+    draw.text(
+        (cx, cy + 16),
+        "nothing playing — queue with .vplay <url>",
+        anchor="mm",
+        fill=(150, 150, 160),
+    )
+    return img
+
+
+def _frame_from_image(img: Image.Image) -> av.VideoFrame:
     frame: av.VideoFrame = av.VideoFrame.from_image(img)  # type: ignore[no-untyped-call]
     return frame.reformat(format="yuv420p")

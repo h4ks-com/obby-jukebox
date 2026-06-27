@@ -44,8 +44,6 @@ spec:
               value: jukebox
             - name: VOICE_CHANNEL
               value: "$jukebox"
-            - name: ICE_TRANSPORT_POLICY
-              value: all
             - name: YTDLP_COOKIES
               value: /cookies/cookies.txt
             - name: HTTP_PORT

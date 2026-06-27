@@ -32,8 +32,6 @@ class Signal(TypedDict, total=False):
     mid: str
     mlineidx: int
     state: str
-    kind: str
-    members: list[str]
     turn: TurnConfig
     error: str
     # SDP chunking
@@ -45,28 +43,10 @@ class Signal(TypedDict, total=False):
 _ESCAPE = str.maketrans(
     {";": "\\:", " ": "\\s", "\\": "\\\\", "\r": "\\r", "\n": "\\n"}
 )
-_UNESCAPE = {":": ";", "s": " ", "\\": "\\", "r": "\r", "n": "\n"}
 
 
 def escape_tag_value(value: str) -> str:
     return value.translate(_ESCAPE)
-
-
-def unescape_tag_value(value: str) -> str:
-    out: list[str] = []
-    i = 0
-    n = len(value)
-    while i < n:
-        ch = value[i]
-        if ch == "\\" and i + 1 < n:
-            out.append(_UNESCAPE.get(value[i + 1], value[i + 1]))
-            i += 2
-        elif ch == "\\":
-            i += 1  # trailing backslash is dropped
-        else:
-            out.append(ch)
-            i += 1
-    return "".join(out)
 
 
 def _dumps(signal: Signal) -> str:

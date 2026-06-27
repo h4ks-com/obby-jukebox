@@ -9,8 +9,8 @@ def test_silent_frame_format():
     assert f.samples == 960
 
 
-def test_fallback_frame_format():
-    f = tracks._fallback_frame(640, 360)
+def test_idle_frame_format():
+    f = tracks._frame_from_image(tracks._idle_image(640, 360))
     assert (f.width, f.height) == (640, 360)
     assert f.format.name == "yuv420p"
 

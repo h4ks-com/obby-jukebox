@@ -1,23 +1,20 @@
+import irctokens
+
 from obby_jukebox import signaling
 from obby_jukebox.signaling import Reassembler, Signal
 
 
-def test_escape_roundtrip():
-    raw = "a;b c\\d\r\ne"
-    assert signaling.unescape_tag_value(signaling.escape_tag_value(raw)) == raw
-
-
-def test_unescape_trailing_backslash_dropped():
-    assert signaling.unescape_tag_value("abc\\") == "abc"
+def test_escape_known_values():
+    assert signaling.escape_tag_value("a;b c\\d\r\ne") == "a\\:b\\sc\\\\d\\r\\ne"
 
 
 def test_encode_small_signal_single_line():
     lines = signaling.encode_signal("$vc", {"type": "join", "channel": "$vc"})
     assert len(lines) == 1
-    prefix, _, target = lines[0].partition(" TAGMSG ")
-    assert target == "$vc"
-    value = prefix.removeprefix("@" + signaling.RTC_TAG + "=")
-    assert signaling.parse_rtc_tag(signaling.unescape_tag_value(value)) == {
+    parsed = irctokens.tokenise(lines[0])
+    assert parsed.command == "TAGMSG"
+    assert parsed.params[0] == "$vc"
+    assert signaling.parse_rtc_tag(parsed.tags[signaling.RTC_TAG]) == {
         "type": "join",
         "channel": "$vc",
     }

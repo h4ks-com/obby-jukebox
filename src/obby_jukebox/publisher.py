@@ -54,6 +54,7 @@ class Publisher:
         self._video: JukeboxVideoTrack | None = None
         self._media_started = False
         self._tasks: set[asyncio.Task[None]] = set()
+        self._pending_ice: list[Signal] = []
 
     def wake(self) -> None:
         self._wake.set()
@@ -167,6 +168,9 @@ class Publisher:
         await self._pc.setRemoteDescription(
             RTCSessionDescription(sdp=sig["sdp"], type="answer")
         )
+        pending, self._pending_ice = self._pending_ice, []
+        for cand in pending:
+            await self._add_ice(cand)
 
     async def _on_renegotiate(self, sig: Signal) -> None:
         if self._pc is None:
@@ -180,8 +184,15 @@ class Publisher:
     async def _on_ice(self, sig: Signal) -> None:
         if self._pc is None:
             return
-        raw = sig.get("cand", "")
-        candidate = candidate_from_sdp(raw.removeprefix("candidate:"))
+        if self._pc.remoteDescription is None:
+            self._pending_ice.append(sig)  # flushed once the answer is applied
+            return
+        await self._add_ice(sig)
+
+    async def _add_ice(self, sig: Signal) -> None:
+        if self._pc is None:
+            return
+        candidate = candidate_from_sdp(sig.get("cand", "").removeprefix("candidate:"))
         candidate.sdpMid = sig.get("mid")
         candidate.sdpMLineIndex = sig.get("mlineidx")
         await self._pc.addIceCandidate(candidate)
@@ -216,12 +227,16 @@ class Publisher:
                 logger.warning("open failed for %s: %s", item.title, e)
                 continue
             logger.info("now playing: %s", item.title)
-            if self._audio is not None and source.audio is not None:
-                self._audio.set_source(source.audio)
-            if self._video is not None and source.video is not None:
-                self._video.set_source(source.video)
-            self._send({"type": "video", "state": "on"})
-            await self._await_end(source)
+            try:
+                if self._audio is not None and source.audio is not None:
+                    self._audio.set_source(source.audio)
+                if self._video is not None and source.video is not None:
+                    self._video.set_source(source.video)
+                self._send({"type": "video", "state": "on"})
+                await self._await_end(source)
+            finally:
+                self._set_idle()
+                _stop_player(source)
 
     async def _await_end(self, source: MediaPlayer) -> None:
         track = source.video or source.audio
@@ -229,3 +244,11 @@ class Publisher:
             track is not None and track.readyState == "live" and not self._skip.is_set()
         ):
             await asyncio.sleep(0.5)
+
+
+def _stop_player(source: MediaPlayer) -> None:
+    """Stop a MediaPlayer's tracks so its libav container + worker thread are
+    released; otherwise each played item leaks a running decode pipeline."""
+    for track in (source.audio, source.video):
+        if track is not None:
+            track.stop()

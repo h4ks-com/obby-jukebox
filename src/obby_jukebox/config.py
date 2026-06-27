@@ -18,18 +18,15 @@ class Settings(BaseSettings):
     voice_channel: str = "$youtube"
 
     stun_url: str = "stun:stun.l.google.com:19302"
-    ice_transport_policy: str = "all"  # "all" or "relay"
 
     ytdlp_cookies: str = ""  # path to a cookies.txt, optional
 
     video_width: int = 1280
     video_height: int = 720
     video_fps: int = 30
-    video_bitrate: str = "2500k"
     idle_image: str = ""  # path to a placeholder image; blank → generated
 
     max_queue: int = 100
-    max_item_seconds: int = 0  # 0 = no cap
 
     http_bind: str = "0.0.0.0"
     http_port: int = 8080

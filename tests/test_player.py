@@ -57,19 +57,18 @@ def _fake_ydl(info, captured=None):
 
 
 def test_resolve_uses_ytdlp():
-    info = {"url": "https://cdn/stream.mp4", "title": "Cool Video", "is_live": False}
+    info = {"url": "https://cdn/stream.mp4", "title": "Cool Video"}
     with patch("obby_jukebox.player.yt_dlp.YoutubeDL", side_effect=_fake_ydl(info)):
         out = resolve("https://youtu.be/x")
     assert out.media_url == "https://cdn/stream.mp4"
     assert out.title == "Cool Video"
-    assert out.is_live is False
 
 
 def test_resolve_copies_readonly_cookies_to_writable_temp(tmp_path):
     src = tmp_path / "ro.txt"
     src.write_text("COOKIEDATA")
     captured: dict[str, object] = {}
-    info = {"url": "u", "title": "t", "is_live": False}
+    info = {"url": "u", "title": "t"}
     with patch(
         "obby_jukebox.player.yt_dlp.YoutubeDL",
         side_effect=_fake_ydl(info, captured),

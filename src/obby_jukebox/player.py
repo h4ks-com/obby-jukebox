@@ -28,7 +28,6 @@ class Item:
 class Resolved:
     media_url: str
     title: str
-    is_live: bool
 
 
 class Playlist:
@@ -81,8 +80,4 @@ def resolve(url: str, cookies: str = "") -> Resolved:
     finally:
         if tmp_cookies:
             os.unlink(tmp_cookies)
-    return Resolved(
-        media_url=info["url"],
-        title=info.get("title", url),
-        is_live=bool(info.get("is_live")),
-    )
+    return Resolved(media_url=info["url"], title=info.get("title", url))
