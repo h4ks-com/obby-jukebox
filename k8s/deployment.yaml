@@ -43,7 +43,7 @@ spec:
             - name: IRC_NICK
               value: jukebox
             - name: VOICE_CHANNEL
-              value: "^youtube"
+              value: "$jukebox"
             - name: ICE_TRANSPORT_POLICY
               value: all
             - name: YTDLP_COOKIES
