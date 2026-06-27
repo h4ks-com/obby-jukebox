@@ -58,22 +58,20 @@ async def _run() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
-    tasks = [
-        asyncio.create_task(irc.run()),
-        asyncio.create_task(publisher.start()),
-        asyncio.create_task(server.serve()),
-    ]
-    await asyncio.wait(
-        [asyncio.create_task(stop.wait()), *tasks],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    # start() is short-lived (join handshake then returns); only the long-running
+    # tasks (or a shutdown signal) should trigger teardown.
+    start_task = asyncio.create_task(publisher.start())
+    stop_task = asyncio.create_task(stop.wait())
+    serving = [asyncio.create_task(irc.run()), asyncio.create_task(server.serve())]
+
+    await asyncio.wait([stop_task, *serving], return_when=asyncio.FIRST_COMPLETED)
     await publisher.stop()
     irc.quit("shutting down")
     await asyncio.sleep(0.5)  # flush QUIT before the socket closes
-    for task in tasks:
+    for task in (start_task, stop_task, *serving):
         task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await asyncio.gather(*tasks)
+        await asyncio.gather(start_task, stop_task, *serving)
 
 
 def main() -> None:
