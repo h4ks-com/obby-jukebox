@@ -14,11 +14,22 @@ import uvicorn
 from obby_jukebox.api import create_app
 from obby_jukebox.commands import CommandHandler
 from obby_jukebox.config import Settings
+from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.ircconn import IrcClient
+from obby_jukebox.jellyfin import JellyfinClient
 from obby_jukebox.player import Playlist
 from obby_jukebox.publisher import Publisher
 
-VOICE_CAPS = ["message-tags", "server-time", "obsidianirc/voice"]
+logger = logging.getLogger(__name__)
+
+VOICE_CAPS = ["message-tags", "server-time", "account-tag", "obsidianirc/voice"]
+
+
+async def _init_fallback(fallback: FallbackShow, series: str) -> None:
+    try:
+        await fallback.set_series(series)
+    except (LookupError, OSError, ValueError) as e:
+        logger.warning("could not start default fallback %r: %s", series, e)
 
 
 async def _run() -> None:
@@ -41,9 +52,20 @@ async def _run() -> None:
         sasl_pass=settings.irc_sasl_pass,
         caps=VOICE_CAPS,
     )
-    publisher = Publisher(irc, settings, playlist)
+    jellyfin = JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key)
+    fallback = FallbackShow(jellyfin)
+    publisher = Publisher(irc, settings, playlist, fallback)
+    admins = {
+        a.strip().casefold() for a in settings.admin_accounts.split(",") if a.strip()
+    }
     irc.on_message = CommandHandler(
-        irc, playlist, settings.voice_channel, publisher.wake, publisher.skip
+        irc,
+        playlist,
+        settings.voice_channel,
+        publisher.wake,
+        publisher.skip,
+        fallback,
+        admins,
     ).on_message
 
     app = create_app(playlist, publisher.wake, publisher.skip, api_key=settings.api_key)
@@ -67,15 +89,20 @@ async def _run() -> None:
     start_task = asyncio.create_task(publisher.start())
     stop_task = asyncio.create_task(stop.wait())
     serving = [asyncio.create_task(irc.run()), asyncio.create_task(server.serve())]
+    side_tasks = [start_task]
+    if settings.jellyfin_api_key and settings.fallback_series:
+        side_tasks.append(
+            asyncio.create_task(_init_fallback(fallback, settings.fallback_series))
+        )
 
     await asyncio.wait([stop_task, *serving], return_when=asyncio.FIRST_COMPLETED)
     await publisher.stop()
     irc.quit("shutting down")
     await asyncio.sleep(0.5)  # flush QUIT before the socket closes
-    for task in (start_task, stop_task, *serving):
+    for task in (stop_task, *serving, *side_tasks):
         task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await asyncio.gather(start_task, stop_task, *serving)
+        await asyncio.gather(stop_task, *serving, *side_tasks)
 
 
 def main() -> None:

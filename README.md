@@ -17,6 +17,15 @@ Queue and control it from the `$tv` channel (commands are ignored in PMs):
 .help           list the commands
 ```
 
+When the queue is empty the bot plays a fallback show off Jellyfin instead of an idle
+card. Admins (IRC accounts in `ADMIN_ACCOUNTS`) control it:
+
+```
+.show <name> [SxxExx]   play this series from a season/episode (default S01E01)
+.show search <name>     search Jellyfin for matching series
+.show off               stop the fallback (back to the idle card)
+```
+
 ## Run your own
 
 ```sh
@@ -26,6 +35,8 @@ docker run --rm \
   -e IRC_NICK=jukebox \
   -e IRC_SASL_USER=jukebox -e IRC_SASL_PASS=... \
   -e VOICE_CHANNEL='$tv' \
+  -e JELLYFIN_URL=http://jellyfin:8096 -e JELLYFIN_API_KEY=... \
+  -e ADMIN_ACCOUNTS=you \
   -p 8080:8080 \
   obby-jukebox
 ```

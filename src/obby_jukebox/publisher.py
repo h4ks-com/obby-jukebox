@@ -26,8 +26,9 @@ from aiortc.sdp import candidate_from_sdp
 from yt_dlp.utils import DownloadError
 
 from obby_jukebox.config import Settings
+from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.ircconn import IrcClient
-from obby_jukebox.player import Playlist, resolve
+from obby_jukebox.player import Item, Playlist, Resolved, resolve
 from obby_jukebox.signaling import (
     RTC_TAG,
     Reassembler,
@@ -41,10 +42,17 @@ logger = logging.getLogger(__name__)
 
 
 class Publisher:
-    def __init__(self, irc: IrcClient, settings: Settings, playlist: Playlist) -> None:
+    def __init__(
+        self,
+        irc: IrcClient,
+        settings: Settings,
+        playlist: Playlist,
+        fallback: FallbackShow,
+    ) -> None:
         self.irc = irc
         self.s = settings
         self.playlist = playlist
+        self.fallback = fallback
         self.channel = settings.voice_channel
         self._reasm = Reassembler()
         self._self_join = asyncio.Event()
@@ -249,41 +257,64 @@ class Publisher:
             self._skip.clear()
             item = self.playlist.take_next()
             if item is None:
-                self._set_idle()
-                await self._wake.wait()
-                self._wake.clear()
-                continue
-            logger.info("resolving: %s", item.url)
-            try:
-                resolved = await asyncio.to_thread(
-                    resolve, item.url, self.s.ytdlp_cookies
-                )
-            except (DownloadError, KeyError, OSError) as e:
-                logger.warning("resolve failed for %s: %s", item.url, e)
-                continue
-            item.title = item.title or resolved.title
-            try:
-                source = MediaPlayer(resolved.media_url)
-            except (OSError, ValueError) as e:
-                logger.warning("open failed for %s: %s", item.title, e)
-                continue
-            logger.info("now playing: %s", item.title)
-            try:
-                if self._audio is not None and source.audio is not None:
-                    self._audio.set_source(source.audio)
-                if self._video is not None and source.video is not None:
-                    self._video.set_source(source.video)
-                self._send({"type": "video", "state": "on"})
-                await self._await_end(source)
-            finally:
-                self._set_idle()
-                _stop_player(source)
+                await self._play_fallback_or_idle()
+            else:
+                await self._play_item(item)
 
-    async def _await_end(self, source: MediaPlayer) -> None:
+    async def _play_fallback_or_idle(self) -> None:
+        episode = self.fallback.peek()
+        if episode is None:
+            self._set_idle()
+            await self._wake.wait()
+            self._wake.clear()
+            return
+        self._wake.clear()
+        await self._play_resolved(episode, interruptible=True)
+        # Move to the next episode unless a user queued something (resume the
+        # show where we left off after their items play). Natural end, a .skip,
+        # or a failed open all advance, so a bad episode can't wedge the channel.
+        if not self.playlist.upcoming():
+            self.fallback.advance()
+        await asyncio.sleep(0.2)  # guard against a hot loop on repeated failures
+
+    async def _play_item(self, item: Item) -> None:
+        logger.info("resolving: %s", item.url)
+        try:
+            resolved = await asyncio.to_thread(resolve, item.url, self.s.ytdlp_cookies)
+        except (DownloadError, KeyError, OSError) as e:
+            logger.warning("resolve failed for %s: %s", item.url, e)
+            return
+        item.title = item.title or resolved.title
+        await self._play_resolved(
+            Resolved(resolved.media_url, item.title), interruptible=False
+        )
+
+    async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
+        try:
+            source = MediaPlayer(resolved.media_url)
+        except (OSError, ValueError) as e:
+            logger.warning("open failed for %s: %s", resolved.title, e)
+            return
+        logger.info("now playing: %s", resolved.title)
+        try:
+            if self._audio is not None and source.audio is not None:
+                self._audio.set_source(source.audio)
+            if self._video is not None and source.video is not None:
+                self._video.set_source(source.video)
+            self._send({"type": "video", "state": "on"})
+            await self._await_end(source, interruptible=interruptible)
+        finally:
+            self._set_idle()
+            _stop_player(source)
+
+    async def _await_end(self, source: MediaPlayer, *, interruptible: bool) -> None:
         track = source.video or source.audio
-        while (
-            track is not None and track.readyState == "live" and not self._skip.is_set()
-        ):
+        while track is not None and track.readyState == "live":
+            if self._skip.is_set():
+                return
+            # A queued user request preempts the fallback show immediately.
+            if interruptible and self.playlist.upcoming():
+                return
             await asyncio.sleep(0.5)
 
 

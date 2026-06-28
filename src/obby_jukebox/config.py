@@ -19,6 +19,12 @@ class Settings(BaseSettings):
 
     stun_url: str = "stun:coturn.h4ks.com:3478"
 
+    # Jellyfin fallback show: plays episodes in order whenever the queue is idle.
+    jellyfin_url: str = "http://jellyfin.media-stack.svc.cluster.local:8096"
+    jellyfin_api_key: str = ""  # blank → fallback disabled
+    admin_accounts: str = ""  # comma-separated IRC accounts allowed to run .show
+    fallback_series: str = ""  # series name to auto-start on boot, optional
+
     ytdlp_cookies: str = ""  # path to a cookies.txt, optional
 
     video_width: int = 1280

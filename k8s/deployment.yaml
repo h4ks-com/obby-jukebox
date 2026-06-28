@@ -52,6 +52,18 @@ spec:
               value: "8080"
             - name: LOG_LEVEL
               value: info
+            # Fallback show via Jellyfin (media-stack ns, reachable cross-ns).
+            # Without the API key the fallback is disabled and the idle card shows.
+            - name: JELLYFIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: obby-jukebox-jellyfin
+                  key: api-key
+                  optional: true
+            - name: ADMIN_ACCOUNTS
+              value: "mattf"
+            - name: FALLBACK_SERIES
+              value: ""
           livenessProbe:
             httpGet:
               path: /healthz

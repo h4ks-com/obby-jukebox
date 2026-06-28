@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 TagMsgHandler = Callable[[str, str, dict[str, str | None]], None]
 JoinHandler = Callable[[str, str], None]
-MessageHandler = Callable[[str, str, str, str | None], None]
+MessageHandler = Callable[[str, str, str, str | None, str | None], None]
 
 
 def _escape_tag_value(value: str) -> str:
@@ -134,9 +134,15 @@ class IrcClient:
         elif cmd == "PRIVMSG" and line.source:
             target = line.params[0] if line.params else ""
             text = line.params[1] if len(line.params) > 1 else ""
-            msgid = (line.tags or {}).get("msgid")
+            tags = line.tags or {}
             if self.on_message:
-                self.on_message(line.hostmask.nickname, target, text, msgid)
+                self.on_message(
+                    line.hostmask.nickname,
+                    target,
+                    text,
+                    tags.get("msgid"),
+                    tags.get("account"),
+                )
 
     def _handle_isupport(self, line: Line) -> None:
         # 005 params: <nick> TOKEN[=value]... :are supported by this server
