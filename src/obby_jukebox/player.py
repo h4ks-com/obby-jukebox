@@ -65,6 +65,9 @@ def resolve(url: str, cookies: str = "") -> Resolved:
         "no_warnings": True,
         "noplaylist": True,
         "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
+        # Bound network ops so a stalled fetch surfaces as a socket timeout
+        # (OSError) the caller can skip, instead of wedging the player loop.
+        "socket_timeout": 20,
     }
     tmp_cookies = ""
     if cookies and os.path.exists(cookies):
