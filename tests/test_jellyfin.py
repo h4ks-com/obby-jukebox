@@ -31,3 +31,17 @@ async def test_episodes_tolerate_missing_fields():
 async def test_empty_payload_is_empty_list():
     c = _client({})
     assert await c.search_series("x") == []
+
+
+async def test_episodes_sorted_by_season_then_number():
+    c = _client(
+        {
+            "Items": [
+                {"Id": "b", "ParentIndexNumber": 2, "IndexNumber": 1},
+                {"Id": "a", "ParentIndexNumber": 1, "IndexNumber": 2},
+                {"Id": "c", "ParentIndexNumber": 1, "IndexNumber": 1},
+            ]
+        }
+    )
+    eps = await c.episodes("s1")
+    assert [(e.season, e.number) for e in eps] == [(1, 1), (1, 2), (2, 1)]

@@ -71,11 +71,9 @@ class JellyfinClient:
                 "Recursive": "true",
                 "ParentId": series_id,
                 "IncludeItemTypes": "Episode",
-                "SortBy": "ParentIndexNumber,IndexNumber",
-                "SortOrder": "Ascending",
             }
         )
-        return [
+        episodes = [
             Episode(
                 id=_as_str(it.get("Id")),
                 season=_as_int(it.get("ParentIndexNumber")),
@@ -84,6 +82,9 @@ class JellyfinClient:
             )
             for it in items
         ]
+        # Sort client-side so order never depends on the server honoring SortBy.
+        episodes.sort(key=lambda e: (e.season, e.number))
+        return episodes
 
     def stream_url(self, item_id: str) -> str:
         # static=true → direct play of the original file; ffmpeg decodes it.
