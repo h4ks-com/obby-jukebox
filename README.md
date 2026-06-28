@@ -2,18 +2,19 @@
 
 A community video jukebox for IRC. Queue links (anything `yt-dlp` supports) and they play, back to back, as a live video stream you can watch together in your IRC client.
 
-Live on **irc.h4ks.com** — join **#youtube**.
+Live on **irc.h4ks.com** — join **$tv**.
 
 ## Use it
 
-Queue and control it from chat:
+Queue and control it from the `$tv` channel (commands are ignored in PMs):
 
 ```
-.vplay <url>     add a video to the queue
-.vqueue          show what's coming up
-.vnp             what's playing now
-.vskip           skip the current video
-.vclear          clear the queue
+.play <url>     add a video to the queue
+.queue          show what's coming up
+.now            what's playing now
+.skip           skip the current video
+.clear          clear the queue
+.help           list the commands
 ```
 
 ## Run your own
@@ -24,7 +25,7 @@ docker run --rm \
   -e IRC_HOST=irc.example.com \
   -e IRC_NICK=jukebox \
   -e IRC_SASL_USER=jukebox -e IRC_SASL_PASS=... \
-  -e VOICE_CHANNEL='$youtube' \
+  -e VOICE_CHANNEL='$tv' \
   -p 8080:8080 \
   obby-jukebox
 ```

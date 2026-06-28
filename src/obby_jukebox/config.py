@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     irc_sasl_user: str = ""
     irc_sasl_pass: str = ""
 
-    voice_channel: str = "$youtube"
+    voice_channel: str = "$tv"
 
     stun_url: str = "stun:coturn.h4ks.com:3478"
 

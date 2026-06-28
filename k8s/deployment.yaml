@@ -43,7 +43,7 @@ spec:
             - name: IRC_NICK
               value: jukebox
             - name: VOICE_CHANNEL
-              value: "$jukebox"
+              value: "$tv"
             - name: STUN_URL
               value: stun:coturn.h4ks.com:3478
             - name: YTDLP_COOKIES
