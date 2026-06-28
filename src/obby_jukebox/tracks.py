@@ -13,6 +13,7 @@ import fractions
 import os
 
 import av
+import av.filter
 from aiortc import MediaStreamTrack
 from aiortc.mediastreams import MediaStreamError
 from PIL import Image, ImageDraw
@@ -91,6 +92,10 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._step = _VIDEO_CLOCK // fps
         self._frame_time = 1 / fps
         self._pts = 0
+        self._graph: av.filter.Graph | None = None
+        self._graph_in: av.filter.context.FilterContext | None = None
+        self._graph_out: av.filter.context.FilterContext | None = None
+        self._graph_key: tuple[int, int, str] | None = None
         # Static fallback shown whenever the queue is empty, so the channel is
         # never a black/empty tile and the bot keeps holding the streamer slot.
         # Kept as a PIL image so each recv() builds a fresh frame (reusing one
@@ -113,9 +118,7 @@ class JukeboxVideoTrack(MediaStreamTrack):
                 self._source = None
                 raw = None
             if isinstance(raw, av.VideoFrame):
-                frame = raw.reformat(
-                    width=self._width, height=self._height, format="yuv420p"
-                )
+                frame = self._letterbox(raw)
         if frame is None:
             await asyncio.sleep(self._frame_time)
             frame = _frame_from_image(self._idle_image)
@@ -123,6 +126,47 @@ class JukeboxVideoTrack(MediaStreamTrack):
         frame.time_base = fractions.Fraction(1, _VIDEO_CLOCK)
         self._pts += self._step
         return frame
+
+    def _letterbox(self, raw: av.VideoFrame) -> av.VideoFrame:
+        """Scale the source into the fixed output size preserving its aspect
+        ratio, centered with black bars — so portrait/4:3 sources aren't
+        stretched. The graph is rebuilt whenever the source geometry changes."""
+        key = (raw.width, raw.height, raw.format.name)
+        if key != self._graph_key or self._graph_in is None or self._graph_out is None:
+            self._build_graph(raw)
+            self._graph_key = key
+        assert self._graph_in is not None and self._graph_out is not None
+        self._graph_in.push(raw)
+        out = self._graph_out.pull()
+        assert isinstance(out, av.VideoFrame)
+        return out
+
+    def _build_graph(self, template: av.VideoFrame) -> None:
+        graph = av.filter.Graph()
+        buffer = graph.add_buffer(
+            width=template.width,
+            height=template.height,
+            format=template.format,
+            time_base=template.time_base or fractions.Fraction(1, _VIDEO_CLOCK),
+        )
+        scale = graph.add(
+            "scale",
+            f"{self._width}:{self._height}"
+            ":force_original_aspect_ratio=decrease:force_divisible_by=2",
+        )
+        pad = graph.add(
+            "pad", f"{self._width}:{self._height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
+        fmt = graph.add("format", "yuv420p")
+        sink = graph.add("buffersink")
+        buffer.link_to(scale)
+        scale.link_to(pad)
+        pad.link_to(fmt)
+        fmt.link_to(sink)
+        graph.configure()
+        self._graph = graph
+        self._graph_in = buffer
+        self._graph_out = sink
 
 
 def _silent_frame() -> av.AudioFrame:

@@ -1,3 +1,5 @@
+import av
+
 from obby_jukebox import tracks
 from obby_jukebox.tracks import JukeboxAudioTrack, JukeboxVideoTrack
 
@@ -22,6 +24,15 @@ async def test_audio_track_emits_silence_without_source():
     assert frame.pts == 0
     nxt = await track.recv()
     assert nxt.pts == frame.samples  # pts stays monotonic
+
+
+def test_video_letterbox_keeps_fixed_output_size():
+    track = JukeboxVideoTrack(640, 360, fps=30)
+    wide = track._letterbox(av.VideoFrame(320, 100, "yuv420p"))
+    assert (wide.width, wide.height) == (640, 360)
+    assert wide.format.name == "yuv420p"
+    tall = track._letterbox(av.VideoFrame(100, 320, "yuv420p"))
+    assert (tall.width, tall.height) == (640, 360)
 
 
 async def test_video_track_emits_fallback_without_source():
