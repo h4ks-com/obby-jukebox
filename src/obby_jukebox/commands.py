@@ -15,12 +15,15 @@ from obby_jukebox.player import Playlist, QueueFull
 logger = logging.getLogger(__name__)
 
 _QUEUE_PREVIEW = 5
+_QUEUED_REACTION = "✅"
 
 
 class ChannelClient(Protocol):
     nick: str
 
     def privmsg(self, target: str, text: str) -> None: ...
+
+    def react(self, target: str, msgid: str, emoji: str) -> None: ...
 
 
 class CommandHandler:
@@ -38,7 +41,9 @@ class CommandHandler:
         self.wake = wake
         self.skip = skip
 
-    def on_message(self, sender: str, target: str, text: str) -> None:
+    def on_message(
+        self, sender: str, target: str, text: str, msgid: str | None = None
+    ) -> None:
         if target != self.channel:
             logger.debug("ignoring non-channel message to %s", target)
             return
@@ -51,7 +56,7 @@ class CommandHandler:
         arg = parts[1].strip() if len(parts) > 1 else ""
         logger.info("command from %s: .%s %s", sender, cmd, arg)
         if cmd == "play":
-            self._play(arg)
+            self._play(arg, msgid)
         elif cmd == "skip":
             self.skip()
             self._reply("skipped")
@@ -65,7 +70,7 @@ class CommandHandler:
         elif cmd == "help":
             self._reply("commands: .play <url> | .skip | .clear | .now | .queue")
 
-    def _play(self, arg: str) -> None:
+    def _play(self, arg: str, msgid: str | None) -> None:
         if not arg:
             self._reply("usage: .play <url>")
             return
@@ -75,7 +80,12 @@ class CommandHandler:
             self._reply(str(e))
             return
         self.wake()
-        self._reply(f"queued {item.url}")
+        # A ✅ reaction on the requester's message is the ack; fall back to a
+        # text reply when the message carried no msgid (no message-tags).
+        if msgid:
+            self.irc.react(self.channel, msgid, _QUEUED_REACTION)
+        else:
+            self._reply(f"queued {item.url}")
 
     def _now(self) -> None:
         cur = self.playlist.now

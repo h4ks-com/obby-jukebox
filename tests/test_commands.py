@@ -6,9 +6,13 @@ class FakeIrc:
     def __init__(self, nick: str = "jukebox") -> None:
         self.nick = nick
         self.sent: list[tuple[str, str]] = []
+        self.reacted: list[tuple[str, str, str]] = []
 
     def privmsg(self, target: str, text: str) -> None:
         self.sent.append((target, text))
+
+    def react(self, target: str, msgid: str, emoji: str) -> None:
+        self.reacted.append((target, msgid, emoji))
 
 
 def _handler(nick: str = "jukebox", channel: str = "$jukebox"):
@@ -28,6 +32,15 @@ def test_play_adds_and_wakes():
     assert [i.url for i in playlist.upcoming()] == ["http://x/v"]
     assert woke == [True]
     assert "http://x/v" in irc.sent[-1][1]
+
+
+def test_play_reacts_with_msgid():
+    handler, irc, playlist, woke, _ = _handler()
+    handler.on_message("alice", "$jukebox", ".play http://x/v", msgid="abc123")
+    assert [i.url for i in playlist.upcoming()] == ["http://x/v"]
+    assert woke == [True]
+    assert irc.reacted == [("$jukebox", "abc123", "✅")]
+    assert irc.sent == []  # the reaction is the ack; no redundant text reply
 
 
 def test_skip_calls_skip():

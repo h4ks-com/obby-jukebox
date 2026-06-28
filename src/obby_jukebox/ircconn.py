@@ -16,7 +16,18 @@ logger = logging.getLogger(__name__)
 
 TagMsgHandler = Callable[[str, str, dict[str, str | None]], None]
 JoinHandler = Callable[[str, str], None]
-MessageHandler = Callable[[str, str, str], None]
+MessageHandler = Callable[[str, str, str, str | None], None]
+
+
+def _escape_tag_value(value: str) -> str:
+    """IRCv3 message-tag value escaping (https://ircv3.net/specs/extensions/message-tags)."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", "\\:")
+        .replace(" ", "\\s")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
 
 
 class IrcClient:
@@ -46,6 +57,10 @@ class IrcClient:
         self._reader: asyncio.StreamReader | None = None
         self._want: set[str] = set()
         self._caps_ls: set[str] = set()
+        self.acked: set[str] = set()
+        # Bot mode char advertised by the server (ISUPPORT BOT=<char>), if any.
+        self._bot_mode: str | None = None
+        self._bot_mode_sent = False
 
     async def connect(self) -> None:
         ctx = ssl.create_default_context() if self.tls else None
@@ -67,6 +82,14 @@ class IrcClient:
 
     def privmsg(self, target: str, text: str) -> None:
         self.send_raw(f"PRIVMSG {target} :{text}")
+
+    def tagmsg(self, target: str, tags: dict[str, str]) -> None:
+        rendered = ";".join(f"{k}={_escape_tag_value(v)}" for k, v in tags.items())
+        self.send_raw(f"@{rendered} TAGMSG {target}")
+
+    def react(self, target: str, msgid: str, emoji: str) -> None:
+        """React to a message with an emoji (IRCv3 +draft/react)."""
+        self.tagmsg(target, {"+draft/react": emoji, "+reply": msgid})
 
     def quit(self, message: str = "") -> None:
         with contextlib.suppress(RuntimeError):
@@ -97,6 +120,9 @@ class IrcClient:
             self.send_raw(f"NICK {self.nick}")
         elif cmd == "001":
             self.registered.set()
+            self._maybe_set_bot_mode()
+        elif cmd == "005":
+            self._handle_isupport(line)
         elif cmd == "JOIN" and line.source:
             chan = line.params[0] if line.params else ""
             if self.on_join:
@@ -108,8 +134,23 @@ class IrcClient:
         elif cmd == "PRIVMSG" and line.source:
             target = line.params[0] if line.params else ""
             text = line.params[1] if len(line.params) > 1 else ""
+            msgid = (line.tags or {}).get("msgid")
             if self.on_message:
-                self.on_message(line.hostmask.nickname, target, text)
+                self.on_message(line.hostmask.nickname, target, text, msgid)
+
+    def _handle_isupport(self, line: Line) -> None:
+        # 005 params: <nick> TOKEN[=value]... :are supported by this server
+        for token in line.params[1:-1]:
+            key, _, value = token.partition("=")
+            if key == "BOT" and value:
+                self._bot_mode = value
+        self._maybe_set_bot_mode()
+
+    def _maybe_set_bot_mode(self) -> None:
+        if self._bot_mode_sent or not self._bot_mode or not self.registered.is_set():
+            return
+        self.send_raw(f"MODE {self.nick} +{self._bot_mode}")
+        self._bot_mode_sent = True
 
     def _handle_cap(self, line: Line) -> None:
         sub = line.params[1].upper() if len(line.params) > 1 else ""
@@ -127,7 +168,9 @@ class IrcClient:
             else:
                 self.send_raw("CAP END")
         elif sub == "ACK":
-            self._want -= set(line.params[-1].split())
+            acked = set(line.params[-1].split())
+            self.acked |= acked
+            self._want -= acked
             if not self._want:
                 if self.sasl_user:
                     self.send_raw("AUTHENTICATE PLAIN")
