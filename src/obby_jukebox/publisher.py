@@ -58,6 +58,7 @@ class Publisher:
         self._self_join = asyncio.Event()
         self._skip = asyncio.Event()
         self._wake = asyncio.Event()
+        self._fallback_reload = asyncio.Event()
         self._pc: RTCPeerConnection | None = None
         self._audio: JukeboxAudioTrack | None = None
         self._video: JukeboxVideoTrack | None = None
@@ -71,6 +72,13 @@ class Publisher:
 
     def skip(self) -> None:
         self._skip.set()
+
+    def reload_fallback(self) -> None:
+        """Drop the fallback episode that's playing now so a `.show` change or
+        `.show off` takes effect immediately instead of at the episode's end.
+        Wakes the loop too, so a change made while idle also starts at once."""
+        self._fallback_reload.set()
+        self._wake.set()
 
     async def stop(self) -> None:
         """Leave the channel + close the PC so the SFU drops our peer cleanly,
@@ -269,7 +277,13 @@ class Publisher:
             self._wake.clear()
             return
         self._wake.clear()
+        self._fallback_reload.clear()
         await self._play_resolved(episode, interruptible=True)
+        # A .show change/off interrupted this episode: re-peek the new state
+        # without advancing, so a freshly chosen show starts at its own episode.
+        if self._fallback_reload.is_set():
+            self._fallback_reload.clear()
+            return
         # Move to the next episode unless a user queued something (resume the
         # show where we left off after their items play). Natural end, a .skip,
         # or a failed open all advance, so a bad episode can't wedge the channel.
@@ -312,8 +326,11 @@ class Publisher:
         while track is not None and track.readyState == "live":
             if self._skip.is_set():
                 return
-            # A queued user request preempts the fallback show immediately.
-            if interruptible and self.playlist.upcoming():
+            # A queued user request, or a .show change/off, preempts the
+            # fallback show immediately (user items aren't interruptible).
+            if interruptible and (
+                self.playlist.upcoming() or self._fallback_reload.is_set()
+            ):
                 return
             await asyncio.sleep(0.5)
 

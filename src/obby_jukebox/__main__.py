@@ -68,6 +68,7 @@ async def _run() -> None:
         settings.voice_channel,
         publisher.wake,
         publisher.skip,
+        publisher.reload_fallback,
         fallback,
         admins,
     ).on_message

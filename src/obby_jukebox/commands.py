@@ -50,6 +50,7 @@ class CommandHandler:
         channel: str,
         wake: Callable[[], None],
         skip: Callable[[], None],
+        reload_fallback: Callable[[], None],
         fallback: FallbackShow,
         admins: set[str],
         spawn: Callable[
@@ -61,6 +62,7 @@ class CommandHandler:
         self.channel = channel
         self.wake = wake
         self.skip = skip
+        self.reload_fallback = reload_fallback
         self.fallback = fallback
         self.admins = admins
         self.spawn = spawn
@@ -149,6 +151,7 @@ class CommandHandler:
             return
         if arg.casefold() == "off":
             self.fallback.clear()
+            self.reload_fallback()  # stop the episode playing now, not at its end
             self._reply("fallback: off")
             return
         if arg.casefold().startswith("search "):
@@ -183,7 +186,9 @@ class CommandHandler:
             logger.warning("jellyfin set_series failed: %s", e)
             self._reply("could not load that show")
             return
-        self.wake()  # kick the media loop so the show starts even while idle
+        # Start the new show now: wakes the loop if idle, and cuts the
+        # currently-playing episode so the switch isn't deferred to its end.
+        self.reload_fallback()
         self._reply(status)
 
     def _reply(self, text: str) -> None:

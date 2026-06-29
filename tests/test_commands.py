@@ -45,6 +45,7 @@ class Harness(NamedTuple):
     playlist: Playlist
     woke: list[bool]
     skipped: list[bool]
+    reloaded: list[bool]
     fallback: FallbackShow
     coros: list[Coroutine[object, object, None]]
 
@@ -57,6 +58,7 @@ def _handler(
     fallback = FallbackShow(_jellyfin())
     woke: list[bool] = []
     skipped: list[bool] = []
+    reloaded: list[bool] = []
     coros: list[Coroutine[object, object, None]] = []
     handler = CommandHandler(
         irc,
@@ -64,11 +66,12 @@ def _handler(
         channel,
         lambda: woke.append(True),
         lambda: skipped.append(True),
+        lambda: reloaded.append(True),
         fallback,
         admins or set(),
         spawn=coros.append,
     )
-    return Harness(handler, irc, playlist, woke, skipped, fallback, coros)
+    return Harness(handler, irc, playlist, woke, skipped, reloaded, fallback, coros)
 
 
 def test_play_adds_and_wakes():
@@ -166,7 +169,7 @@ async def test_show_sets_fallback_from_season_episode():
     assert len(h.coros) == 1
     await h.coros[0]
     assert h.fallback.active
-    assert h.woke == [True]  # kicks the media loop out of idle
+    assert h.reloaded == [True]  # starts the show now (idle or mid-episode)
     assert "S01E02" in h.fallback.status()
     assert "Breaking Bad" in h.irc.sent[-1][1]
 
@@ -184,8 +187,10 @@ async def test_show_off_clears():
     h.handler.on_message("mattf", "$jukebox", ".show breaking", account="mattf")
     await h.coros[0]
     assert h.fallback.active
+    before = len(h.reloaded)
     h.handler.on_message("mattf", "$jukebox", ".show off", account="mattf")
     assert not h.fallback.active
+    assert len(h.reloaded) == before + 1  # cuts the episode now, not at its end
 
 
 async def test_now_reports_fallback_when_idle():
