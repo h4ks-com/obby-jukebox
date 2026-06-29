@@ -66,7 +66,6 @@ class IrcClient:
         self.acked: set[str] = set()
         self._cap_ended = False
         self._register_attempted = False
-        self._batch_seq = 0
         # Bot mode char advertised by the server (ISUPPORT BOT=<char>), if any.
         self._bot_mode: str | None = None
         self._bot_mode_sent = False
@@ -91,23 +90,6 @@ class IrcClient:
 
     def privmsg(self, target: str, text: str) -> None:
         self.send_raw(f"PRIVMSG {target} :{text}")
-
-    def multiline_privmsg(self, target: str, lines: list[str]) -> None:
-        """Send several display lines as one IRCv3 draft/multiline batch so
-        clients render them as a single grouped message; fall back to one
-        PRIVMSG per line when the server didn't negotiate the batch caps."""
-        if not lines:
-            return
-        if len(lines) == 1 or not {"batch", "draft/multiline"} <= self.acked:
-            for line in lines:
-                self.privmsg(target, line)
-            return
-        self._batch_seq += 1
-        ref = f"ml{self._batch_seq}"
-        self.send_raw(f"BATCH +{ref} draft/multiline {target}")
-        for line in lines:
-            self.send_raw(f"@batch={ref} PRIVMSG {target} :{line}")
-        self.send_raw(f"BATCH -{ref}")
 
     def tagmsg(self, target: str, tags: dict[str, str]) -> None:
         rendered = ";".join(f"{k}={_escape_tag_value(v)}" for k, v in tags.items())

@@ -62,8 +62,6 @@ class ChannelClient(Protocol):
 
     def privmsg(self, target: str, text: str) -> None: ...
 
-    def multiline_privmsg(self, target: str, lines: list[str]) -> None: ...
-
     def react(self, target: str, msgid: str, emoji: str) -> None: ...
 
 
@@ -246,4 +244,5 @@ class CommandHandler:
         self.irc.privmsg(self.channel, text)
 
     def _reply_lines(self, lines: list[str]) -> None:
-        self.irc.multiline_privmsg(self.channel, lines)
+        for line in lines:
+            self.irc.privmsg(self.channel, line)

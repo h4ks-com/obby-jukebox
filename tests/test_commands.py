@@ -25,10 +25,6 @@ class FakeIrc:
     def privmsg(self, target: str, text: str) -> None:
         self.sent.append((target, text))
 
-    def multiline_privmsg(self, target: str, lines: list[str]) -> None:
-        for line in lines:
-            self.sent.append((target, line))
-
     def react(self, target: str, msgid: str, emoji: str) -> None:
         self.reacted.append((target, msgid, emoji))
 
