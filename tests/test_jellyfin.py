@@ -139,4 +139,5 @@ def test_stream_url_burns_subtitle_when_index_given():
     assert url == (
         "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
         "&SubtitleStreamIndex=2&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
+        "&VideoBitrate=8000000"
     )

@@ -10,6 +10,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# h264_vaapi (and other VBR HW encoders) refuse to open without an explicit
+# target bitrate ("Bitrate must be set for VBR RC mode"), which fails the burn-in
+# transcode on HEVC sources. Pass one so hardware transcode works; 8 Mbps is
+# ample for the 720p the bot re-encodes to.
+_BURN_VIDEO_BITRATE = 8_000_000
+
 
 @dataclass
 class Series:
@@ -123,10 +129,12 @@ class JellyfinClient:
         # Burn the subtitle into the picture. SubtitleMethod=Encode forces a
         # server-side video transcode (the only way to ship text over a raw
         # WebRTC video track), re-muxed to mkv with codecs ffmpeg opens directly.
+        # VideoBitrate is required for hardware (VAAPI) encoders to open.
         return (
             f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}"
             f"&Static=false&SubtitleStreamIndex={subtitle_index}"
             "&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
+            f"&VideoBitrate={_BURN_VIDEO_BITRATE}"
         )
 
     async def _items(self, params: dict[str, str]) -> list[dict[str, object]]:
