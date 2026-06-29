@@ -128,18 +128,19 @@ def search_youtube(query: str, cookies: str = "", limit: int = 3) -> list[YtResu
         "skip_download": True,
         "socket_timeout": 20,
     }
+    # Over-fetch so dropping channel/playlist matches still leaves `limit` videos.
     with _cookiefile(cookies) as cookiefile:
         if cookiefile:
             opts["cookiefile"] = cookiefile
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+                info = ydl.extract_info(f"ytsearch{limit + 3}:{query}", download=False)
         except DownloadError as e:
             raise ValueError(str(e)) from e
     entries = info.get("entries", []) if isinstance(info, dict) else []
     results: list[YtResult] = []
     for entry in entries:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or not _is_video(entry):
             continue
         url = entry.get("url") or ""
         if not url.startswith("http"):
@@ -153,4 +154,18 @@ def search_youtube(query: str, cookies: str = "", limit: int = 3) -> list[YtResu
                 duration=int(duration) if duration else None,
             )
         )
+        if len(results) == limit:
+            break
     return results
+
+
+def _is_video(entry: dict[str, object]) -> bool:
+    """A single playable video, not a channel/playlist match — resolving those
+    makes yt-dlp crawl the whole listing."""
+    if entry.get("ie_key") in ("YoutubeTab", "YoutubePlaylist"):
+        return False
+    url = entry.get("url")
+    return not (
+        isinstance(url, str)
+        and any(m in url for m in ("/channel/", "/playlist", "/@", "/user/", "/c/"))
+    )

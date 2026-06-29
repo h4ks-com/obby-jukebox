@@ -40,6 +40,10 @@ from obby_jukebox.tracks import JukeboxAudioTrack, JukeboxVideoTrack
 
 logger = logging.getLogger(__name__)
 
+# Hard ceiling on a single resolve so a pathological URL (e.g. a whole channel
+# yt-dlp tries to enumerate) can never wedge the media loop.
+_RESOLVE_TIMEOUT = 30
+
 
 class Publisher:
     def __init__(
@@ -299,15 +303,39 @@ class Publisher:
 
     async def _play_item(self, item: Item) -> None:
         logger.info("resolving: %s", item.url)
-        try:
-            resolved = await asyncio.to_thread(resolve, item.url, self.s.ytdlp_cookies)
-        except (DownloadError, KeyError, OSError) as e:
-            logger.warning("resolve failed for %s: %s", item.url, e)
+        resolved = await self._resolve(item.url)
+        if resolved is None:
             return
         item.title = item.title or resolved.title
         await self._play_resolved(
             Resolved(resolved.media_url, item.title), interruptible=False
         )
+
+    async def _resolve(self, url: str) -> Resolved | None:
+        """Resolve in a worker thread, but never let it block the loop: a .skip
+        or a timeout abandons it (the thread can't be cancelled, so it drains in
+        the background) and playback moves on."""
+        work = asyncio.ensure_future(
+            asyncio.to_thread(resolve, url, self.s.ytdlp_cookies)
+        )
+        skip = asyncio.ensure_future(self._skip.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {work, skip},
+                timeout=_RESOLVE_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            skip.cancel()
+        if work not in done:
+            work.add_done_callback(_ignore_result)
+            logger.warning("resolve abandoned for %s (skipped or timed out)", url)
+            return None
+        try:
+            return work.result()
+        except (DownloadError, KeyError, OSError) as e:
+            logger.warning("resolve failed for %s: %s", url, e)
+            return None
 
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         try:
@@ -339,6 +367,13 @@ class Publisher:
             ):
                 return
             await asyncio.sleep(0.5)
+
+
+def _ignore_result(task: asyncio.Task[Resolved]) -> None:
+    """Retrieve an abandoned task's outcome so a late failure isn't logged as an
+    unretrieved exception."""
+    if not task.cancelled():
+        task.exception()
 
 
 def _stop_player(source: MediaPlayer) -> None:

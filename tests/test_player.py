@@ -89,15 +89,22 @@ def test_search_youtube_maps_entries():
     info = {
         "entries": [
             {"id": "abc", "title": "T1", "uploader": "U", "duration": 90},
+            {
+                "ie_key": "YoutubeTab",
+                "url": "https://www.youtube.com/channel/UC123",
+                "title": "A Channel",
+            },
             {"url": "https://youtu.be/xyz", "title": "T2", "channel": "C"},
             "not a dict",
         ]
     }
     with patch("obby_jukebox.player.yt_dlp.YoutubeDL", side_effect=_fake_ydl(info)):
         results = search_youtube("kittens")
-    assert results[0] == YtResult("T1", "https://www.youtube.com/watch?v=abc", "U", 90)
-    assert results[1] == YtResult("T2", "https://youtu.be/xyz", "C", None)
-    assert len(results) == 2  # the non-dict entry is skipped
+    # The channel match and the non-dict entry are both dropped; only videos stay.
+    assert results == [
+        YtResult("T1", "https://www.youtube.com/watch?v=abc", "U", 90),
+        YtResult("T2", "https://youtu.be/xyz", "C", None),
+    ]
 
 
 def test_search_cache_is_per_channel_and_user():

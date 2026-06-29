@@ -3,6 +3,8 @@
 A community video jukebox for IRC. Queue links (anything `yt-dlp` supports) and they
 play back to back as a live video stream your IRC client can watch together.
 
+Try it live: connect to `irc.h4ks.com` and join `$tv`.
+
 ## Commands
 
 In the stream channel (ignored in PMs):
@@ -36,7 +38,7 @@ docker build -t obby-jukebox .
 docker run --rm \
   -e IRC_HOST=irc.example.com -e IRC_NICK=jukebox \
   -e IRC_SASL_USER=jukebox -e IRC_SASL_PASS=secret \
-  -e VOICE_CHANNEL='#stream' \
+  -e VOICE_CHANNEL='$stream' \
   -e ADMIN_ACCOUNTS=alice,bob \
   -p 8080:8080 \
   obby-jukebox
@@ -50,8 +52,9 @@ the server requires an address). The fallback channel is optional: set
 disable themselves cleanly when they're unset.
 
 It needs an IRC server with WebRTC stream channels (the `obsidianirc/voice`
-capability) and a client such as [ObsidianIRC](https://github.com/obbyworld/ObsidianIRC)
-to watch. The REST API on `:8080` mirrors the queue: `POST /queue`, `GET /queue`,
+capability) and a client such as [Obby](https://github.com/obbyworld/obby) to
+watch. Stream channels are `$`-prefixed (e.g. `$tv`), not regular `#` channels.
+The REST API on `:8080` mirrors the queue: `POST /queue`, `GET /queue`,
 `GET /now`, `POST /skip`, `POST /clear`.
 
 ## Develop
