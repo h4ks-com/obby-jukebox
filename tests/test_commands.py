@@ -25,6 +25,10 @@ class FakeIrc:
     def privmsg(self, target: str, text: str) -> None:
         self.sent.append((target, text))
 
+    def multiline_privmsg(self, target: str, lines: list[str]) -> None:
+        for line in lines:
+            self.sent.append((target, line))
+
     def react(self, target: str, msgid: str, emoji: str) -> None:
         self.reacted.append((target, msgid, emoji))
 
@@ -181,9 +185,11 @@ async def test_show_search_lists_matches():
     h = _handler(admins={"mattf"})
     h.handler.on_message("mattf", "$jukebox", ".show search breaking", account="mattf")
     await h.coros[0]
-    line = h.irc.sent[-1][1]
-    assert "Breaking Bad" in line
-    assert "S01: 2" in line and "S02: 1" in line  # seasons + episode counts
+    texts = [text for _, text in h.irc.sent]
+    # A single match breaks out one line per season as a watch-list.
+    assert any("Breaking Bad" in t for t in texts)
+    assert any("S01: 2 episodes" in t for t in texts)
+    assert any("S02: 1 episode" in t for t in texts)
     assert not h.fallback.active  # search doesn't change the current show
 
 

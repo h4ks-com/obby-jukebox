@@ -23,7 +23,14 @@ from obby_jukebox.publisher import Publisher
 
 logger = logging.getLogger(__name__)
 
-VOICE_CAPS = ["message-tags", "server-time", "account-tag", "obsidianirc/voice"]
+VOICE_CAPS = [
+    "message-tags",
+    "server-time",
+    "account-tag",
+    "obsidianirc/voice",
+    "batch",
+    "draft/multiline",
+]
 _MAX_BACKOFF = 60
 
 

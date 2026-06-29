@@ -26,22 +26,43 @@ _QUEUED_REACTION = "✅"
 _SXXEXX = re.compile(r"^[sS](\d{1,2})[eE](\d{1,3})$")
 
 
-def _format_summary(summary: SeriesSummary) -> str:
+def _summary_title(summary: SeriesSummary) -> str:
     title = irctext.bold(summary.name)
     if summary.year:
         title += irctext.color(f" ({summary.year})", irctext.GREY)
+    return title
+
+
+def _format_summary(summary: SeriesSummary) -> str:
     if not summary.seasons:
-        return f"{title} — {irctext.color('no episodes', irctext.GREY)}"
+        return (
+            f"{_summary_title(summary)} — {irctext.color('no episodes', irctext.GREY)}"
+        )
     seasons = " ".join(
         f"S{n:02d}: {summary.seasons[n]}" for n in sorted(summary.seasons)
     )
-    return f"{title} — {seasons}"
+    return f"{_summary_title(summary)} — {seasons}"
+
+
+def _season_lines(summary: SeriesSummary) -> list[str]:
+    """One line per season so a single match reads as a watch-list."""
+    if not summary.seasons:
+        return [
+            f"{_summary_title(summary)} — {irctext.color('no episodes', irctext.GREY)}"
+        ]
+    lines = [_summary_title(summary)]
+    for n in sorted(summary.seasons):
+        count = summary.seasons[n]
+        lines.append(f"  S{n:02d}: {count} {'episode' if count == 1 else 'episodes'}")
+    return lines
 
 
 class ChannelClient(Protocol):
     nick: str
 
     def privmsg(self, target: str, text: str) -> None: ...
+
+    def multiline_privmsg(self, target: str, lines: list[str]) -> None: ...
 
     def react(self, target: str, msgid: str, emoji: str) -> None: ...
 
@@ -157,13 +178,13 @@ class CommandHandler:
 
     def _help(self) -> None:
         b = irctext.bold
-        self._reply(
-            f"{b('.play')} <url> · {b('.skip')} · {b('.clear')} · "
-            f"{b('.now')} · {b('.queue')}"
-        )
-        self._reply(
-            f"admin: {b('.show')} <name> [SxxExx] · "
-            f"{b('.show search')} <name> · {b('.show off')}"
+        self._reply_lines(
+            [
+                f"{b('.play')} <url> · {b('.skip')} · {b('.clear')} · "
+                f"{b('.now')} · {b('.queue')}",
+                f"admin: {b('.show')} <name> [SxxExx] · "
+                f"{b('.show search')} <name> · {b('.show off')}",
+            ]
         )
 
     def _show(self, account: str | None, arg: str) -> None:
@@ -201,7 +222,10 @@ class CommandHandler:
         if not results:
             self._reply(irctext.color(f"no series matching {query!r}", irctext.GREY))
             return
-        self._reply_lines([_format_summary(s) for s in results])
+        if len(results) == 1:
+            self._reply_lines(_season_lines(results[0]))
+        else:
+            self._reply_lines([_format_summary(s) for s in results])
 
     async def _set_show(self, query: str, season: int, episode: int) -> None:
         try:
@@ -222,5 +246,4 @@ class CommandHandler:
         self.irc.privmsg(self.channel, text)
 
     def _reply_lines(self, lines: list[str]) -> None:
-        for line in lines:
-            self.irc.privmsg(self.channel, line)
+        self.irc.multiline_privmsg(self.channel, lines)

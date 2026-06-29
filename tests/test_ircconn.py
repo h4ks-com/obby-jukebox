@@ -140,6 +140,39 @@ def test_no_identify_when_already_logged_in():
     assert not any(s.startswith("IDENTIFY") for s in c.sent)
 
 
+def test_multiline_privmsg_sends_batch_when_negotiated():
+    c = Probe()
+    c.acked |= {"batch", "draft/multiline"}
+    c.multiline_privmsg("$tv", ["one", "two"])
+    ref = c.sent[0].split()[1][1:]
+    assert c.sent[0] == f"BATCH +{ref} draft/multiline $tv"
+    assert c.sent[1] == f"@batch={ref} PRIVMSG $tv :one"
+    assert c.sent[2] == f"@batch={ref} PRIVMSG $tv :two"
+    assert c.sent[3] == f"BATCH -{ref}"
+
+
+def test_multiline_privmsg_falls_back_without_caps():
+    c = Probe()
+    c.multiline_privmsg("$tv", ["one", "two"])
+    assert c.sent == ["PRIVMSG $tv :one", "PRIVMSG $tv :two"]
+
+
+def test_single_line_never_uses_a_batch():
+    c = Probe()
+    c.acked |= {"batch", "draft/multiline"}
+    c.multiline_privmsg("$tv", ["only"])
+    assert c.sent == ["PRIVMSG $tv :only"]
+
+
+def test_cap_request_includes_multiline_when_offered():
+    c = Probe()
+    c.caps = ["message-tags", "batch", "draft/multiline"]
+    c.feed("CAP * LS :message-tags batch draft/multiline=max-bytes=5250,max-lines=15")
+    req = next(s for s in c.sent if s.startswith("CAP REQ")).split()
+    assert "batch" in req
+    assert "draft/multiline" in req
+
+
 def test_rpl_loggedin_captures_account():
     c = Probe(register=True)
     c.feed(":srv 900 bot nick!u@h account-name :You are now logged in")
