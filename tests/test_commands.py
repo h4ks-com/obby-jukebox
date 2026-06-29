@@ -158,9 +158,12 @@ def test_show_requires_admin():
     h = _handler(admins={"mattf"})
     h.handler.on_message("eve", "$jukebox", ".show breaking", account="eve")
     assert h.coros == []
-    assert h.irc.sent[-1][1] == "admins only"
-    h.handler.on_message("eve", "$jukebox", ".show breaking", account=None)
-    assert h.irc.sent[-1][1] == "admins only"
+    assert "admins only" in h.irc.sent[-1][1]
+    # An unauthenticated sender (no account-tag) is never an admin, even if their
+    # nick happens to match the allowlist.
+    h.handler.on_message("mattf", "$jukebox", ".show breaking", account=None)
+    assert h.coros == []
+    assert "admins only" in h.irc.sent[-1][1]
 
 
 async def test_show_sets_fallback_from_season_episode():
@@ -178,8 +181,30 @@ async def test_show_search_lists_matches():
     h = _handler(admins={"mattf"})
     h.handler.on_message("mattf", "$jukebox", ".show search breaking", account="mattf")
     await h.coros[0]
-    assert "Breaking Bad" in h.irc.sent[-1][1]
+    line = h.irc.sent[-1][1]
+    assert "Breaking Bad" in line
+    assert "S01: 2" in line and "S02: 1" in line  # seasons + episode counts
     assert not h.fallback.active  # search doesn't change the current show
+
+
+def test_show_unavailable_without_jellyfin():
+    irc = FakeIrc()
+    fallback = FallbackShow(JellyfinClient("http://jf", ""))  # no key → unconfigured
+    coros: list[Coroutine[object, object, None]] = []
+    handler = CommandHandler(
+        irc,
+        Playlist(),
+        "$jukebox",
+        lambda: None,
+        lambda: None,
+        lambda: None,
+        fallback,
+        {"mattf"},
+        spawn=coros.append,
+    )
+    handler.on_message("mattf", "$jukebox", ".show breaking", account="mattf")
+    assert coros == []  # never reaches Jellyfin
+    assert "Jellyfin" in irc.sent[-1][1]
 
 
 async def test_show_off_clears():

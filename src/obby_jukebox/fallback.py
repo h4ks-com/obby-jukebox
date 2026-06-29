@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 
-from obby_jukebox.jellyfin import Episode, JellyfinClient, Series
+from obby_jukebox.jellyfin import Episode, JellyfinClient, SeriesSummary
 from obby_jukebox.player import Resolved
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,17 @@ class FallbackShow:
         self._cursor = 0
         self._series = ""
 
-    async def search(self, query: str) -> list[Series]:
-        return await self._jelly.search_series(query)
+    @property
+    def configured(self) -> bool:
+        return self._jelly.configured
+
+    async def search_detailed(self, query: str, limit: int = 5) -> list[SeriesSummary]:
+        results = await self._jelly.search_series(query, limit)
+        summaries: list[SeriesSummary] = []
+        for series in results:
+            counts = await self._jelly.season_episode_counts(series.id)
+            summaries.append(SeriesSummary(series.name, series.year, counts))
+        return summaries
 
     async def set_series(self, query: str, season: int = 1, episode: int = 1) -> str:
         results = await self._jelly.search_series(query)

@@ -141,3 +141,21 @@ def test_stream_url_burns_subtitle_when_index_given():
         "&SubtitleStreamIndex=2&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
         "&VideoBitrate=8000000"
     )
+
+
+async def test_season_episode_counts():
+    c = _client(
+        {
+            "Items": [
+                {"Id": "a", "ParentIndexNumber": 1},
+                {"Id": "b", "ParentIndexNumber": 1},
+                {"Id": "c", "ParentIndexNumber": 2},
+            ]
+        }
+    )
+    assert await c.season_episode_counts("s1") == {1: 2, 2: 1}
+
+
+def test_configured_tracks_api_key():
+    assert _client({}).configured
+    assert not JellyfinClient("http://jf", "").configured

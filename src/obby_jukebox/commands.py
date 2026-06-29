@@ -13,7 +13,9 @@ import re
 from collections.abc import Callable, Coroutine
 from typing import Protocol
 
+from obby_jukebox import irctext
 from obby_jukebox.fallback import FallbackShow
+from obby_jukebox.jellyfin import SeriesSummary
 from obby_jukebox.player import Playlist, QueueFull
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,18 @@ _QUEUE_PREVIEW = 5
 _SEARCH_PREVIEW = 5
 _QUEUED_REACTION = "✅"
 _SXXEXX = re.compile(r"^[sS](\d{1,2})[eE](\d{1,3})$")
+
+
+def _format_summary(summary: SeriesSummary) -> str:
+    title = irctext.bold(summary.name)
+    if summary.year:
+        title += irctext.color(f" ({summary.year})", irctext.GREY)
+    if not summary.seasons:
+        return f"{title} — {irctext.color('no episodes', irctext.GREY)}"
+    seasons = " ".join(
+        f"S{n:02d}: {summary.seasons[n]}" for n in sorted(summary.seasons)
+    )
+    return f"{title} — {seasons}"
 
 
 class ChannelClient(Protocol):
@@ -101,10 +115,7 @@ class CommandHandler:
         elif cmd == "show":
             self._show(account, arg)
         elif cmd == "help":
-            self._reply(
-                "commands: .play <url> | .skip | .clear | .now | .queue"
-                "  (admin: .show <name> [SxxExx] | .show search <name> | .show off)"
-            )
+            self._help()
 
     def _play(self, arg: str, msgid: str | None) -> None:
         if not arg:
@@ -121,30 +132,50 @@ class CommandHandler:
         if msgid:
             self.irc.react(self.channel, msgid, _QUEUED_REACTION)
         else:
-            self._reply(f"queued {item.url}")
+            self._reply(f"queued {irctext.color(item.url, irctext.TEAL)}")
 
     def _now(self) -> None:
         cur = self.playlist.now
-        if cur is not None:
-            self._reply(f"now playing: {cur.title or cur.url}")
+        title = cur.title or cur.url if cur is not None else self.fallback.now_label()
+        if title is None:
+            self._reply(irctext.color("nothing playing", irctext.GREY))
             return
-        label = self.fallback.now_label()
-        self._reply(f"now playing: {label}" if label else "nothing playing")
+        self._reply(f"▶ now playing: {irctext.bold(title)}")
 
     def _queue(self) -> None:
         upcoming = self.playlist.upcoming()
         if not upcoming:
-            self._reply(
-                self.fallback.status() if self.fallback.active else "queue empty"
-            )
+            if self.fallback.active:
+                self._reply(self.fallback.status())
+            else:
+                self._reply(irctext.color("queue empty", irctext.GREY))
             return
         titles = ", ".join(i.title or i.url for i in upcoming[:_QUEUE_PREVIEW])
         extra = len(upcoming) - _QUEUE_PREVIEW
-        self._reply(f"queue: {titles}" + (f" (+{extra} more)" if extra > 0 else ""))
+        more = irctext.color(f" (+{extra} more)", irctext.GREY) if extra > 0 else ""
+        self._reply(f"{irctext.bold('queue')}: {titles}{more}")
+
+    def _help(self) -> None:
+        b = irctext.bold
+        self._reply(
+            f"{b('.play')} <url> · {b('.skip')} · {b('.clear')} · "
+            f"{b('.now')} · {b('.queue')}"
+        )
+        self._reply(
+            f"admin: {b('.show')} <name> [SxxExx] · "
+            f"{b('.show search')} <name> · {b('.show off')}"
+        )
 
     def _show(self, account: str | None, arg: str) -> None:
         if account is None or account.casefold() not in self.admins:
-            self._reply("admins only")
+            self._reply(irctext.color("admins only (log in first)", irctext.RED))
+            return
+        if not self.fallback.configured:
+            self._reply(
+                irctext.color(
+                    "fallback unavailable: no Jellyfin configured", irctext.RED
+                )
+            )
             return
         if not arg:
             self._reply(self.fallback.status())
@@ -152,7 +183,7 @@ class CommandHandler:
         if arg.casefold() == "off":
             self.fallback.clear()
             self.reload_fallback()  # stop the episode playing now, not at its end
-            self._reply("fallback: off")
+            self._reply(f"fallback: {irctext.color('off', irctext.ORANGE)}")
             return
         if arg.casefold().startswith("search "):
             self.spawn(self._search(arg[len("search ") :].strip()))
@@ -162,29 +193,25 @@ class CommandHandler:
 
     async def _search(self, query: str) -> None:
         try:
-            results = await self.fallback.search(query)
+            results = await self.fallback.search_detailed(query, _SEARCH_PREVIEW)
         except (OSError, ValueError) as e:
             logger.warning("jellyfin search failed: %s", e)
-            self._reply("search failed")
+            self._reply(irctext.color("search failed", irctext.RED))
             return
         if not results:
-            self._reply(f"no series matching {query!r}")
+            self._reply(irctext.color(f"no series matching {query!r}", irctext.GREY))
             return
-        names = " | ".join(
-            f"{s.name}" + (f" ({s.year})" if s.year else "")
-            for s in results[:_SEARCH_PREVIEW]
-        )
-        self._reply(f"matches: {names}")
+        self._reply_lines([_format_summary(s) for s in results])
 
     async def _set_show(self, query: str, season: int, episode: int) -> None:
         try:
             status = await self.fallback.set_series(query, season, episode)
         except LookupError as e:
-            self._reply(str(e))
+            self._reply(irctext.color(str(e), irctext.RED))
             return
         except (OSError, ValueError) as e:
             logger.warning("jellyfin set_series failed: %s", e)
-            self._reply("could not load that show")
+            self._reply(irctext.color("could not load that show", irctext.RED))
             return
         # Start the new show now: wakes the loop if idle, and cuts the
         # currently-playing episode so the switch isn't deferred to its end.
@@ -193,3 +220,7 @@ class CommandHandler:
 
     def _reply(self, text: str) -> None:
         self.irc.privmsg(self.channel, text)
+
+    def _reply_lines(self, lines: list[str]) -> None:
+        for line in lines:
+            self.irc.privmsg(self.channel, line)

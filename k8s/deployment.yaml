@@ -42,6 +42,15 @@ spec:
               value: "6697"
             - name: IRC_NICK
               value: jukebox
+            - name: IRC_SASL_USER
+              value: jukebox
+            - name: IRC_SASL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: obby-jukebox-irc
+                  key: sasl-pass
+            - name: IRC_REGISTER_EMAIL
+              value: jukebox@h4ks.com
             - name: VOICE_CHANNEL
               value: "$tv"
             - name: STUN_URL
@@ -61,7 +70,7 @@ spec:
                   key: api-key
                   optional: true
             - name: ADMIN_ACCOUNTS
-              value: "mattf"
+              value: "mattf,Valware"
             - name: FALLBACK_SERIES
               value: ""
             - name: JELLYFIN_BURN_SUBTITLES

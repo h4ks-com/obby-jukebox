@@ -25,6 +25,13 @@ class Series:
 
 
 @dataclass
+class SeriesSummary:
+    name: str
+    year: int | None
+    seasons: dict[int, int]  # season number → episode count
+
+
+@dataclass
 class Episode:
     id: str
     season: int
@@ -74,6 +81,10 @@ class JellyfinClient:
         self._burn_subtitles = burn_subtitles
         self._client = client or httpx.AsyncClient(timeout=15)
 
+    @property
+    def configured(self) -> bool:
+        return bool(self._key)
+
     async def search_series(self, query: str, limit: int = 5) -> list[Series]:
         items = await self._items(
             {
@@ -119,6 +130,20 @@ class JellyfinClient:
         # Sort client-side so order never depends on the server honoring SortBy.
         episodes.sort(key=lambda e: (e.season, e.number))
         return episodes
+
+    async def season_episode_counts(self, series_id: str) -> dict[int, int]:
+        items = await self._items(
+            {
+                "Recursive": "true",
+                "ParentId": series_id,
+                "IncludeItemTypes": "Episode",
+            }
+        )
+        counts: dict[int, int] = {}
+        for it in items:
+            season = _as_int(it.get("ParentIndexNumber"))
+            counts[season] = counts.get(season, 0) + 1
+        return counts
 
     def stream_url(self, item_id: str, subtitle_index: int | None = None) -> str:
         if subtitle_index is None:

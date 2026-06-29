@@ -81,12 +81,18 @@ class Publisher:
         self._wake.set()
 
     async def stop(self) -> None:
-        """Leave the channel + close the PC so the SFU drops our peer cleanly,
-        instead of lingering as a ghost streamer until the IRCd pings it out."""
+        """Leave the channel, cancel the media loop, and close the PC so the SFU
+        drops our peer cleanly instead of lingering as a ghost streamer — and so a
+        reconnect doesn't leave the old decode pipeline running."""
         with contextlib.suppress(RuntimeError):
             self._send({"type": "leave", "channel": self.channel})
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
         if self._pc is not None:
             await self._pc.close()
+            self._pc = None
 
     def _spawn(self, coro: Coroutine[object, object, None]) -> None:
         task = asyncio.ensure_future(coro)

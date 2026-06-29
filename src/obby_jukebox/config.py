@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     irc_nick: str = "jukebox"
     irc_sasl_user: str = ""
     irc_sasl_pass: str = ""
+    # Create the SASL account on the server (IRCv3 draft/account-registration) if
+    # the login fails because it doesn't exist yet. Email is sent only when the
+    # server requires one; blank → "*".
+    irc_register: bool = True
+    irc_register_email: str = ""
 
     voice_channel: str = "$tv"
 

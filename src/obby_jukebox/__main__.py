@@ -1,6 +1,7 @@
 """Entrypoint: wire the IRC client, the WebRTC publisher, and the REST API into
-one asyncio process. If the IRC connection drops the process exits non-zero and
-the orchestrator restarts the single pod."""
+one asyncio process. The IRC link is supervised — a dropped connection is retried
+with backoff while the in-memory queue and fallback position survive — so a blip
+doesn't need a pod restart."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from obby_jukebox.publisher import Publisher
 logger = logging.getLogger(__name__)
 
 VOICE_CAPS = ["message-tags", "server-time", "account-tag", "obsidianirc/voice"]
+_MAX_BACKOFF = 60
 
 
 async def _init_fallback(fallback: FallbackShow, series: str) -> None:
@@ -30,6 +32,11 @@ async def _init_fallback(fallback: FallbackShow, series: str) -> None:
         await fallback.set_series(series)
     except (LookupError, OSError, ValueError) as e:
         logger.warning("could not start default fallback %r: %s", series, e)
+
+
+async def _sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
 
 
 async def _run() -> None:
@@ -43,37 +50,28 @@ async def _run() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     playlist = Playlist(maxlen=settings.max_queue)
-    irc = IrcClient(
-        host=settings.irc_host,
-        port=settings.irc_port,
-        tls=settings.irc_tls,
-        nick=settings.irc_nick,
-        sasl_user=settings.irc_sasl_user,
-        sasl_pass=settings.irc_sasl_pass,
-        caps=VOICE_CAPS,
-    )
     jellyfin = JellyfinClient(
         settings.jellyfin_url,
         settings.jellyfin_api_key,
         burn_subtitles=settings.jellyfin_burn_subtitles,
     )
     fallback = FallbackShow(jellyfin)
-    publisher = Publisher(irc, settings, playlist, fallback)
     admins = {
         a.strip().casefold() for a in settings.admin_accounts.split(",") if a.strip()
     }
-    irc.on_message = CommandHandler(
-        irc,
-        playlist,
-        settings.voice_channel,
-        publisher.wake,
-        publisher.skip,
-        publisher.reload_fallback,
-        fallback,
-        admins,
-    ).on_message
+    # The REST API outlives any single IRC connection; it routes wake/skip to
+    # whichever publisher is currently connected.
+    live: dict[str, Publisher | None] = {"publisher": None}
 
-    app = create_app(playlist, publisher.wake, publisher.skip, api_key=settings.api_key)
+    def wake() -> None:
+        if live["publisher"] is not None:
+            live["publisher"].wake()
+
+    def skip() -> None:
+        if live["publisher"] is not None:
+            live["publisher"].skip()
+
+    app = create_app(playlist, wake, skip, api_key=settings.api_key)
     server = uvicorn.Server(
         uvicorn.Config(
             app,
@@ -83,31 +81,89 @@ async def _run() -> None:
         )
     )
 
-    await irc.connect()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
-    # start() is short-lived (join handshake then returns); only the long-running
-    # tasks (or a shutdown signal) should trigger teardown.
-    start_task = asyncio.create_task(publisher.start())
-    stop_task = asyncio.create_task(stop.wait())
-    serving = [asyncio.create_task(irc.run()), asyncio.create_task(server.serve())]
-    side_tasks = [start_task]
-    if settings.jellyfin_api_key and settings.fallback_series:
-        side_tasks.append(
-            asyncio.create_task(_init_fallback(fallback, settings.fallback_series))
-        )
+    server_task = asyncio.create_task(server.serve())
+    fallback_init: asyncio.Task[None] | None = None
+    backoff = 1.0
 
-    await asyncio.wait([stop_task, *serving], return_when=asyncio.FIRST_COMPLETED)
-    await publisher.stop()
-    irc.quit("shutting down")
-    await asyncio.sleep(0.5)  # flush QUIT before the socket closes
-    for task in (stop_task, *serving, *side_tasks):
-        task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await asyncio.gather(stop_task, *serving, *side_tasks)
+    while not stop.is_set():
+        irc = IrcClient(
+            host=settings.irc_host,
+            port=settings.irc_port,
+            tls=settings.irc_tls,
+            nick=settings.irc_nick,
+            sasl_user=settings.irc_sasl_user,
+            sasl_pass=settings.irc_sasl_pass,
+            caps=VOICE_CAPS,
+            register=settings.irc_register,
+            register_email=settings.irc_register_email,
+        )
+        publisher = Publisher(irc, settings, playlist, fallback)
+        irc.on_message = CommandHandler(
+            irc,
+            playlist,
+            settings.voice_channel,
+            publisher.wake,
+            publisher.skip,
+            publisher.reload_fallback,
+            fallback,
+            admins,
+        ).on_message
+        live["publisher"] = publisher
+
+        try:
+            await irc.connect()
+        except OSError as e:
+            logger.warning("IRC connect failed: %s; retrying in %ss", e, backoff)
+            await _sleep_unless_stopped(stop, backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF)
+            continue
+
+        start_task = asyncio.create_task(publisher.start())
+        run_task = asyncio.create_task(irc.run())
+        # Start the configured default show once Jellyfin answers, retried on each
+        # reconnect until it sticks. The task is kept out of the teardown below so
+        # a blip mid-fetch doesn't strand the channel without a default.
+        if (
+            settings.fallback_series
+            and jellyfin.configured
+            and not fallback.active
+            and (fallback_init is None or fallback_init.done())
+        ):
+            fallback_init = asyncio.create_task(
+                _init_fallback(fallback, settings.fallback_series)
+            )
+        stop_task = asyncio.create_task(stop.wait())
+
+        await asyncio.wait([run_task, stop_task], return_when=asyncio.FIRST_COMPLETED)
+
+        await publisher.stop()
+        irc.quit("shutting down" if stop.is_set() else "reconnecting")
+        await asyncio.sleep(0.3)  # flush QUIT before the socket closes
+        live["publisher"] = None
+        connection_tasks = [start_task, run_task, stop_task]
+        for task in connection_tasks:
+            task.cancel()
+        await asyncio.gather(*connection_tasks, return_exceptions=True)
+
+        if not stop.is_set():
+            # Reset only after a session that actually registered; a server that
+            # accepts the socket then drops us pre-registration keeps backing off.
+            if irc.registered.is_set():
+                backoff = 1.0
+            logger.warning("IRC link lost; reconnecting in %ss", backoff)
+            await _sleep_unless_stopped(stop, backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF)
+
+    if fallback_init is not None and not fallback_init.done():
+        fallback_init.cancel()
+        await asyncio.gather(fallback_init, return_exceptions=True)
+    server.should_exit = True
+    await asyncio.gather(server_task, return_exceptions=True)
 
 
 def main() -> None:

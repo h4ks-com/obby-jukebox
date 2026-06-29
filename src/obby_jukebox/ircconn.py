@@ -41,6 +41,8 @@ class IrcClient:
         sasl_user: str = "",
         sasl_pass: str = "",
         caps: list[str],
+        register: bool = False,
+        register_email: str = "",
     ) -> None:
         self.host = host
         self.port = port
@@ -48,8 +50,12 @@ class IrcClient:
         self.nick = nick
         self.sasl_user = sasl_user
         self.sasl_pass = sasl_pass
+        self.register = register
+        self.register_email = register_email
         self.caps = caps
         self.registered = asyncio.Event()
+        self.logged_in = False
+        self.account = ""
         self.on_tagmsg: TagMsgHandler | None = None
         self.on_join: JoinHandler | None = None
         self.on_message: MessageHandler | None = None
@@ -58,6 +64,8 @@ class IrcClient:
         self._want: set[str] = set()
         self._caps_ls: set[str] = set()
         self.acked: set[str] = set()
+        self._cap_ended = False
+        self._register_attempted = False
         # Bot mode char advertised by the server (ISUPPORT BOT=<char>), if any.
         self._bot_mode: str | None = None
         self._bot_mode_sent = False
@@ -113,14 +121,24 @@ class IrcClient:
             self._handle_cap(line)
         elif cmd == "AUTHENTICATE":
             self._handle_authenticate(line)
-        elif cmd in ("903", "904", "905", "906", "907"):
-            self.send_raw("CAP END")
+        elif cmd == "900":  # RPL_LOGGEDIN
+            self.account = line.params[2] if len(line.params) > 2 else self.sasl_user
+        elif cmd == "903":  # SASL success
+            self.logged_in = True
+            self._end_cap()
+        elif cmd in ("902", "904", "905", "906", "907"):  # SASL failed/aborted
+            self._after_sasl_failure()
+        elif cmd == "REGISTER":
+            self._handle_register_reply(line)
+        elif cmd == "FAIL":
+            self._handle_fail(line)
         elif cmd == "433":  # nick in use during registration
             self.nick = self.nick + "_"
             self.send_raw(f"NICK {self.nick}")
         elif cmd == "001":
             self.registered.set()
             self._maybe_set_bot_mode()
+            self._maybe_identify()
         elif cmd == "005":
             self._handle_isupport(line)
         elif cmd == "JOIN" and line.source:
@@ -168,11 +186,17 @@ class IrcClient:
             wanted = [c for c in self.caps if c in available]
             if self.sasl_user and "sasl" in available:
                 wanted.append("sasl")
+            if (
+                self.register
+                and self.sasl_user
+                and "draft/account-registration" in available
+            ):
+                wanted.append("draft/account-registration")
             self._want = set(wanted)
             if wanted:
                 self.send_raw("CAP REQ :" + " ".join(wanted))
             else:
-                self.send_raw("CAP END")
+                self._end_cap()
         elif sub == "ACK":
             acked = set(line.params[-1].split())
             self.acked |= acked
@@ -181,11 +205,56 @@ class IrcClient:
                 if self.sasl_user:
                     self.send_raw("AUTHENTICATE PLAIN")
                 else:
-                    self.send_raw("CAP END")
+                    self._end_cap()
         elif sub == "NAK":
-            self.send_raw("CAP END")
+            self._end_cap()
 
     def _handle_authenticate(self, line: Line) -> None:
         if line.params and line.params[0] == "+":
             blob = f"{self.sasl_user}\0{self.sasl_user}\0{self.sasl_pass}".encode()
             self.send_raw("AUTHENTICATE " + base64.b64encode(blob).decode())
+
+    def _end_cap(self) -> None:
+        if not self._cap_ended:
+            self._cap_ended = True
+            self.send_raw("CAP END")
+
+    def _after_sasl_failure(self) -> None:
+        can_register = (
+            self.register
+            and self.sasl_user
+            and not self._register_attempted
+            and "draft/account-registration" in self.acked
+        )
+        if not can_register:
+            self._end_cap()
+            return
+        self._register_attempted = True
+        email = self.register_email or "*"
+        logger.info("SASL login failed; registering account %s", self.sasl_user)
+        self.send_raw(f"REGISTER {self.sasl_user} {email} {self.sasl_pass}")
+
+    def _handle_register_reply(self, line: Line) -> None:
+        status = line.params[0].upper() if line.params else ""
+        if status == "SUCCESS":
+            self.logged_in = True
+            self.account = self.sasl_user
+            logger.info("registered and logged in as %s", self.sasl_user)
+        elif status == "VERIFICATION_REQUIRED":
+            logger.warning(
+                "account %s needs email verification; continuing unauthenticated",
+                self.sasl_user,
+            )
+        self._end_cap()
+
+    def _handle_fail(self, line: Line) -> None:
+        if line.params and line.params[0].upper() == "REGISTER":
+            code = line.params[1] if len(line.params) > 1 else "?"
+            logger.warning("registration failed (%s); continuing unauthenticated", code)
+            self._end_cap()
+
+    def _maybe_identify(self) -> None:
+        """NickServ-style fallback for servers without account-registration: if we
+        have credentials but SASL didn't log us in, identify to the account."""
+        if self.sasl_user and self.sasl_pass and not self.logged_in:
+            self.send_raw(f"IDENTIFY {self.sasl_user} {self.sasl_pass}")
