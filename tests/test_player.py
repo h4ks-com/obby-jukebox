@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from obby_jukebox.player import Playlist, QueueFull, resolve
+from obby_jukebox.player import (
+    Playlist,
+    QueueFull,
+    SearchCache,
+    YtResult,
+    resolve,
+    search_youtube,
+)
 
 
 def test_add_and_upcoming():
@@ -76,3 +83,27 @@ def test_resolve_copies_readonly_cookies_to_writable_temp(tmp_path):
         resolve("https://x", cookies=str(src))
     assert captured["cookiefile"] != str(src)  # a copy, not the read-only mount
     assert captured["content"] == "COOKIEDATA"
+
+
+def test_search_youtube_maps_entries():
+    info = {
+        "entries": [
+            {"id": "abc", "title": "T1", "uploader": "U", "duration": 90},
+            {"url": "https://youtu.be/xyz", "title": "T2", "channel": "C"},
+            "not a dict",
+        ]
+    }
+    with patch("obby_jukebox.player.yt_dlp.YoutubeDL", side_effect=_fake_ydl(info)):
+        results = search_youtube("kittens")
+    assert results[0] == YtResult("T1", "https://www.youtube.com/watch?v=abc", "U", 90)
+    assert results[1] == YtResult("T2", "https://youtu.be/xyz", "C", None)
+    assert len(results) == 2  # the non-dict entry is skipped
+
+
+def test_search_cache_is_per_channel_and_user():
+    cache = SearchCache()
+    assert cache.get("$tv", "alice") == []
+    results = [YtResult("A", "http://a")]
+    cache.put("$tv", "alice", results)
+    assert cache.get("$tv", "alice") == results
+    assert cache.get("$tv", "bob") == []

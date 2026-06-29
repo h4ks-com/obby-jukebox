@@ -16,12 +16,19 @@ from typing import Protocol
 from obby_jukebox import irctext
 from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.jellyfin import SeriesSummary
-from obby_jukebox.player import Playlist, QueueFull
+from obby_jukebox.player import (
+    Playlist,
+    QueueFull,
+    SearchCache,
+    YtResult,
+    search_youtube,
+)
 
 logger = logging.getLogger(__name__)
 
 _QUEUE_PREVIEW = 5
 _SEARCH_PREVIEW = 5
+_YT_PREVIEW = 3
 _QUEUED_REACTION = "✅"
 _SXXEXX = re.compile(r"^[sS](\d{1,2})[eE](\d{1,3})$")
 
@@ -53,8 +60,27 @@ def _season_lines(summary: SeriesSummary) -> list[str]:
     lines = [_summary_title(summary)]
     for n in sorted(summary.seasons):
         count = summary.seasons[n]
-        lines.append(f"  S{n:02d}: {count} {'episode' if count == 1 else 'episodes'}")
+        label = irctext.bold(f"S{n:02d}")
+        eps = irctext.color(
+            f"{count} {'episode' if count == 1 else 'episodes'}", irctext.CYAN
+        )
+        lines.append(f"  {label} · {eps}")
     return lines
+
+
+def _fmt_duration(seconds: int) -> str:
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def _format_result(index: int, result: YtResult) -> str:
+    parts = [f"{irctext.bold(f'{index}.')} {irctext.bold(result.title)}"]
+    if result.uploader:
+        parts.append(irctext.color(result.uploader, irctext.GREY))
+    if result.duration is not None:
+        parts.append(irctext.color(_fmt_duration(result.duration), irctext.TEAL))
+    return " · ".join(parts)
 
 
 class ChannelClient(Protocol):
@@ -86,6 +112,9 @@ class CommandHandler:
         reload_fallback: Callable[[], None],
         fallback: FallbackShow,
         admins: set[str],
+        search_cache: SearchCache,
+        cookies: str = "",
+        search_fn: Callable[[str, str, int], list[YtResult]] = search_youtube,
         spawn: Callable[
             [Coroutine[object, object, None]], object
         ] = asyncio.ensure_future,
@@ -98,6 +127,9 @@ class CommandHandler:
         self.reload_fallback = reload_fallback
         self.fallback = fallback
         self.admins = admins
+        self.search_cache = search_cache
+        self.cookies = cookies
+        self.search_fn = search_fn
         self.spawn = spawn
 
     def on_message(
@@ -120,7 +152,9 @@ class CommandHandler:
         arg = parts[1].strip() if len(parts) > 1 else ""
         logger.info("command from %s (account=%s): .%s %s", sender, account, cmd, arg)
         if cmd == "play":
-            self._play(arg, msgid)
+            self._play(sender, account, arg, msgid)
+        elif cmd == "yt":
+            self._yt(sender, account, arg)
         elif cmd == "skip":
             self.skip()
             self._reply("skipped")
@@ -133,15 +167,36 @@ class CommandHandler:
             self._queue()
         elif cmd == "show":
             self._show(account, arg)
+        elif cmd == "showsearch":
+            self._showsearch(account, arg)
         elif cmd == "help":
             self._help()
 
-    def _play(self, arg: str, msgid: str | None) -> None:
+    def _play(
+        self, sender: str, account: str | None, arg: str, msgid: str | None
+    ) -> None:
+        results = self.search_cache.get(self.channel, (account or sender).casefold())
         if not arg:
-            self._reply("usage: .play <url>")
+            if not results:
+                self._reply("usage: .play <url|number> — or .yt <terms> first")
+                return
+            self._enqueue(results[0].url, results[0].title, msgid)
             return
+        if arg.isdigit():
+            index = int(arg)
+            if not 1 <= index <= len(results):
+                self._reply(
+                    irctext.color(f"no result #{index}; run .yt first", irctext.RED)
+                )
+                return
+            chosen = results[index - 1]
+            self._enqueue(chosen.url, chosen.title, msgid)
+            return
+        self._enqueue(arg, "", msgid)
+
+    def _enqueue(self, url: str, title: str, msgid: str | None) -> None:
         try:
-            item = self.playlist.add(arg)
+            item = self.playlist.add(url, title)
         except QueueFull as e:
             self._reply(str(e))
             return
@@ -151,7 +206,30 @@ class CommandHandler:
         if msgid:
             self.irc.react(self.channel, msgid, _QUEUED_REACTION)
         else:
-            self._reply(f"queued {irctext.color(item.url, irctext.TEAL)}")
+            self._reply(f"queued {irctext.color(item.title or item.url, irctext.TEAL)}")
+
+    def _yt(self, sender: str, account: str | None, arg: str) -> None:
+        if not arg:
+            self._reply("usage: .yt <search terms>")
+            return
+        self.spawn(self._run_yt((account or sender).casefold(), arg))
+
+    async def _run_yt(self, user: str, query: str) -> None:
+        try:
+            results = await asyncio.to_thread(
+                self.search_fn, query, self.cookies, _YT_PREVIEW
+            )
+        except (OSError, ValueError) as e:
+            logger.warning("youtube search failed: %s", e)
+            self._reply(irctext.color("search failed", irctext.RED))
+            return
+        if not results:
+            self._reply(irctext.color(f"no videos matching {query!r}", irctext.GREY))
+            return
+        self.search_cache.put(self.channel, user, results)
+        lines = [_format_result(i, r) for i, r in enumerate(results, 1)]
+        lines.append(irctext.color("→ .play <number> to queue", irctext.GREY))
+        self._reply_lines(lines)
 
     def _now(self) -> None:
         cur = self.playlist.now
@@ -178,23 +256,28 @@ class CommandHandler:
         b = irctext.bold
         self._reply_lines(
             [
-                f"{b('.play')} <url> · {b('.skip')} · {b('.clear')} · "
-                f"{b('.now')} · {b('.queue')}",
+                f"{b('.yt')} <terms> · {b('.play')} <url|#> · {b('.skip')} · "
+                f"{b('.clear')} · {b('.now')} · {b('.queue')}",
                 f"admin: {b('.show')} <name> [SxxExx] · "
-                f"{b('.show search')} <name> · {b('.show off')}",
+                f"{b('.showsearch')} <name> · {b('.show off')}",
             ]
         )
 
-    def _show(self, account: str | None, arg: str) -> None:
+    def _require_fallback(self, account: str | None) -> bool:
         if account is None or account.casefold() not in self.admins:
             self._reply(irctext.color("admins only (log in first)", irctext.RED))
-            return
+            return False
         if not self.fallback.configured:
             self._reply(
                 irctext.color(
                     "fallback unavailable: no Jellyfin configured", irctext.RED
                 )
             )
+            return False
+        return True
+
+    def _show(self, account: str | None, arg: str) -> None:
+        if not self._require_fallback(account):
             return
         if not arg:
             self._reply(self.fallback.status())
@@ -204,11 +287,16 @@ class CommandHandler:
             self.reload_fallback()  # stop the episode playing now, not at its end
             self._reply(f"fallback: {irctext.color('off', irctext.ORANGE)}")
             return
-        if arg.casefold().startswith("search "):
-            self.spawn(self._search(arg[len("search ") :].strip()))
-            return
         query, season, episode = _parse_show_arg(arg)
         self.spawn(self._set_show(query, season, episode))
+
+    def _showsearch(self, account: str | None, arg: str) -> None:
+        if not self._require_fallback(account):
+            return
+        if not arg:
+            self._reply("usage: .showsearch <name>")
+            return
+        self.spawn(self._search(arg))
 
     async def _search(self, query: str) -> None:
         try:

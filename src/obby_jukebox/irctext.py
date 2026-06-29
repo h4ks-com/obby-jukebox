@@ -9,6 +9,7 @@ _RESET = "\x0f"
 RED = 4
 ORANGE = 7
 TEAL = 10
+CYAN = 11
 GREY = 14
 
 

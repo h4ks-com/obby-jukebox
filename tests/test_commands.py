@@ -6,7 +6,7 @@ import httpx
 from obby_jukebox.commands import CommandHandler
 from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.jellyfin import JellyfinClient
-from obby_jukebox.player import Playlist
+from obby_jukebox.player import Playlist, SearchCache, YtResult
 
 SERIES = [{"Id": "s1", "Name": "Breaking Bad", "ProductionYear": 2008}]
 EPISODES = [
@@ -48,18 +48,27 @@ class Harness(NamedTuple):
     reloaded: list[bool]
     fallback: FallbackShow
     coros: list[Coroutine[object, object, None]]
+    search_cache: SearchCache
 
 
 def _handler(
-    nick: str = "jukebox", channel: str = "$jukebox", admins: set[str] | None = None
+    nick: str = "jukebox",
+    channel: str = "$jukebox",
+    admins: set[str] | None = None,
+    yt_results: list[YtResult] | None = None,
 ) -> Harness:
     irc = FakeIrc(nick)
     playlist = Playlist()
     fallback = FallbackShow(_jellyfin())
+    cache = SearchCache()
     woke: list[bool] = []
     skipped: list[bool] = []
     reloaded: list[bool] = []
     coros: list[Coroutine[object, object, None]] = []
+
+    def fake_search(query: str, cookies: str, limit: int) -> list[YtResult]:
+        return yt_results or []
+
     handler = CommandHandler(
         irc,
         playlist,
@@ -69,9 +78,13 @@ def _handler(
         lambda: reloaded.append(True),
         fallback,
         admins or set(),
+        cache,
+        search_fn=fake_search,
         spawn=coros.append,
     )
-    return Harness(handler, irc, playlist, woke, skipped, reloaded, fallback, coros)
+    return Harness(
+        handler, irc, playlist, woke, skipped, reloaded, fallback, coros, cache
+    )
 
 
 def test_play_adds_and_wakes():
@@ -177,16 +190,56 @@ async def test_show_sets_fallback_from_season_episode():
     assert "Breaking Bad" in h.irc.sent[-1][1]
 
 
-async def test_show_search_lists_matches():
+async def test_showsearch_lists_matches():
     h = _handler(admins={"mattf"})
-    h.handler.on_message("mattf", "$jukebox", ".show search breaking", account="mattf")
+    h.handler.on_message("mattf", "$jukebox", ".showsearch breaking", account="mattf")
     await h.coros[0]
     texts = [text for _, text in h.irc.sent]
     # A single match breaks out one line per season as a watch-list.
     assert any("Breaking Bad" in t for t in texts)
-    assert any("S01: 2 episodes" in t for t in texts)
-    assert any("S02: 1 episode" in t for t in texts)
+    assert any("S01" in t and "2 episodes" in t for t in texts)
+    assert any("S02" in t and "1 episode" in t for t in texts)
     assert not h.fallback.active  # search doesn't change the current show
+
+
+async def test_yt_lists_results_and_caches():
+    results = [
+        YtResult("First Vid", "http://y/1", "Chan A", 65),
+        YtResult("Second Vid", "http://y/2", "Chan B", 3725),
+    ]
+    h = _handler(yt_results=results)
+    h.handler.on_message("alice", "$jukebox", ".yt cats", account="alice")
+    await h.coros[0]
+    texts = [text for _, text in h.irc.sent]
+    assert any("First Vid" in t for t in texts)
+    assert any("1:05" in t for t in texts)  # mm:ss
+    assert any("1:02:05" in t for t in texts)  # h:mm:ss
+    assert h.search_cache.get("$jukebox", "alice") == results
+
+
+def test_play_by_index_queues_cached_result():
+    h = _handler()
+    h.search_cache.put(
+        "$jukebox", "alice", [YtResult("A", "http://y/a"), YtResult("B", "http://y/b")]
+    )
+    h.handler.on_message("alice", "$jukebox", ".play 2", account="alice")
+    assert [i.url for i in h.playlist.upcoming()] == ["http://y/b"]
+    assert h.woke == [True]
+
+
+def test_play_no_arg_uses_top_cached_result():
+    h = _handler()
+    h.search_cache.put("$jukebox", "alice", [YtResult("A", "http://y/a")])
+    h.handler.on_message("alice", "$jukebox", ".play", account="alice")
+    assert [i.url for i in h.playlist.upcoming()] == ["http://y/a"]
+
+
+def test_play_index_out_of_range_warns():
+    h = _handler()
+    h.search_cache.put("$jukebox", "alice", [YtResult("A", "http://y/a")])
+    h.handler.on_message("alice", "$jukebox", ".play 9", account="alice")
+    assert h.playlist.upcoming() == []
+    assert "no result #9" in h.irc.sent[-1][1]
 
 
 def test_show_unavailable_without_jellyfin():
@@ -202,6 +255,7 @@ def test_show_unavailable_without_jellyfin():
         lambda: None,
         fallback,
         {"mattf"},
+        SearchCache(),
         spawn=coros.append,
     )
     handler.on_message("mattf", "$jukebox", ".show breaking", account="mattf")

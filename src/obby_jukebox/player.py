@@ -3,14 +3,17 @@ that consumes these lives in `publisher.py` (it owns the WebRTC senders)."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
 import uuid
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import yt_dlp
+from yt_dlp.utils import DownloadError
 
 
 class QueueFull(Exception):
@@ -28,6 +31,28 @@ class Item:
 class Resolved:
     media_url: str
     title: str
+
+
+@dataclass
+class YtResult:
+    title: str
+    url: str
+    uploader: str = ""
+    duration: int | None = None
+
+
+class SearchCache:
+    """Per-(channel, user) memory of the last `.yt` results so `.play <n>` can
+    queue one by index without re-searching."""
+
+    def __init__(self) -> None:
+        self._by_user: dict[tuple[str, str], list[YtResult]] = {}
+
+    def put(self, channel: str, user: str, results: list[YtResult]) -> None:
+        self._by_user[channel, user] = results
+
+    def get(self, channel: str, user: str) -> list[YtResult]:
+        return self._by_user.get((channel, user), [])
 
 
 class Playlist:
@@ -58,6 +83,22 @@ class Playlist:
         return self._current
 
 
+@contextlib.contextmanager
+def _cookiefile(cookies: str) -> Iterator[str]:
+    """Yield a writable copy of the cookies file — yt-dlp rewrites it on close
+    and the mounted secret is read-only — or "" when none is configured."""
+    if not (cookies and os.path.exists(cookies)):
+        yield ""
+        return
+    fd, tmp = tempfile.mkstemp(suffix="-cookies.txt")
+    os.close(fd)
+    shutil.copyfile(cookies, tmp)
+    try:
+        yield tmp
+    finally:
+        os.unlink(tmp)
+
+
 def resolve(url: str, cookies: str = "") -> Resolved:
     """Resolve a page URL to a direct media URL via yt-dlp."""
     opts: dict[str, object] = {
@@ -69,18 +110,47 @@ def resolve(url: str, cookies: str = "") -> Resolved:
         # (OSError) the caller can skip, instead of wedging the player loop.
         "socket_timeout": 20,
     }
-    tmp_cookies = ""
-    if cookies and os.path.exists(cookies):
-        # yt-dlp rewrites the cookiefile on close; the mounted secret is
-        # read-only, so work on a writable copy.
-        fd, tmp_cookies = tempfile.mkstemp(suffix="-cookies.txt")
-        os.close(fd)
-        shutil.copyfile(cookies, tmp_cookies)
-        opts["cookiefile"] = tmp_cookies
-    try:
+    with _cookiefile(cookies) as cookiefile:
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    finally:
-        if tmp_cookies:
-            os.unlink(tmp_cookies)
     return Resolved(media_url=info["url"], title=info.get("title", url))
+
+
+def search_youtube(query: str, cookies: str = "", limit: int = 3) -> list[YtResult]:
+    """Top YouTube matches for a query. extract_flat skips per-video resolution
+    so the search stays fast; `.play` resolves the chosen one later."""
+    opts: dict[str, object] = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "skip_download": True,
+        "socket_timeout": 20,
+    }
+    with _cookiefile(cookies) as cookiefile:
+        if cookiefile:
+            opts["cookiefile"] = cookiefile
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        except DownloadError as e:
+            raise ValueError(str(e)) from e
+    entries = info.get("entries", []) if isinstance(info, dict) else []
+    results: list[YtResult] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url") or ""
+        if not url.startswith("http"):
+            url = f"https://www.youtube.com/watch?v={entry.get('id', '')}"
+        duration = entry.get("duration")
+        results.append(
+            YtResult(
+                title=entry.get("title") or url,
+                url=url,
+                uploader=entry.get("uploader") or entry.get("channel") or "",
+                duration=int(duration) if duration else None,
+            )
+        )
+    return results

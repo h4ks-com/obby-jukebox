@@ -18,7 +18,7 @@ from obby_jukebox.config import Settings
 from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.ircconn import IrcClient
 from obby_jukebox.jellyfin import JellyfinClient
-from obby_jukebox.player import Playlist
+from obby_jukebox.player import Playlist, SearchCache
 from obby_jukebox.publisher import Publisher
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ async def _run() -> None:
         burn_subtitles=settings.jellyfin_burn_subtitles,
     )
     fallback = FallbackShow(jellyfin)
+    search_cache = SearchCache()
     admins = {
         a.strip().casefold() for a in settings.admin_accounts.split(",") if a.strip()
     }
@@ -112,6 +113,8 @@ async def _run() -> None:
             publisher.reload_fallback,
             fallback,
             admins,
+            search_cache,
+            cookies=settings.ytdlp_cookies,
         ).on_message
         live["publisher"] = publisher
 
