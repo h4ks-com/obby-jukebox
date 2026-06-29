@@ -32,6 +32,25 @@ def test_cap_ls_requests_sasl_and_registration():
     assert "draft/account-registration" in req
 
 
+def test_cap_ls_with_values_requests_sasl_and_registration():
+    c = Probe(register=True)
+    c.feed(
+        "CAP * LS :message-tags sasl=PLAIN,EXTERNAL "
+        "draft/account-registration=before-connect,email-required"
+    )
+    req = next(s for s in c.sent if s.startswith("CAP REQ")).split()
+    assert "sasl" in req
+    assert "draft/account-registration" in req
+
+
+def test_no_authenticate_when_server_has_no_sasl():
+    c = Probe(register=True)
+    c.feed("CAP * LS :message-tags")
+    c.feed("CAP * ACK :message-tags")
+    assert "AUTHENTICATE PLAIN" not in c.sent
+    assert "CAP END" in c.sent
+
+
 def test_no_registration_cap_when_disabled():
     c = Probe(register=False)
     c.feed("CAP * LS :sasl draft/account-registration")

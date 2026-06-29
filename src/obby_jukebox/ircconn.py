@@ -179,7 +179,9 @@ class IrcClient:
     def _handle_cap(self, line: Line) -> None:
         sub = line.params[1].upper() if len(line.params) > 1 else ""
         if sub == "LS":
-            self._caps_ls |= set(line.params[-1].split())
+            # CAP LS 302 advertises caps as `name` or `name=value` (e.g.
+            # `sasl=PLAIN,EXTERNAL`); match on the bare name.
+            self._caps_ls |= {tok.split("=", 1)[0] for tok in line.params[-1].split()}
             if len(line.params) > 3 and line.params[2] == "*":
                 return  # multiline CAP LS continuation
             available = self._caps_ls
@@ -202,7 +204,7 @@ class IrcClient:
             self.acked |= acked
             self._want -= acked
             if not self._want:
-                if self.sasl_user:
+                if self.sasl_user and "sasl" in self.acked:
                     self.send_raw("AUTHENTICATE PLAIN")
                 else:
                     self._end_cap()
