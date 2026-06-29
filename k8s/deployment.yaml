@@ -64,6 +64,8 @@ spec:
               value: "mattf"
             - name: FALLBACK_SERIES
               value: ""
+            - name: JELLYFIN_BURN_SUBTITLES
+              value: "true"
           livenessProbe:
             httpGet:
               path: /healthz

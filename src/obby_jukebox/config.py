@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     jellyfin_api_key: str = ""  # blank → fallback disabled
     admin_accounts: str = ""  # comma-separated IRC accounts allowed to run .show
     fallback_series: str = ""  # series name to auto-start on boot, optional
+    # Burn the English subtitle into fallback episodes (Jellyfin transcodes them
+    # in). Off → direct-play with no subtitles and no transcode load.
+    jellyfin_burn_subtitles: bool = True
 
     ytdlp_cookies: str = ""  # path to a cookies.txt, optional
 

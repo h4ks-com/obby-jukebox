@@ -3,12 +3,14 @@ import httpx
 from obby_jukebox.jellyfin import JellyfinClient
 
 
-def _client(payload: dict[str, object]) -> JellyfinClient:
+def _client(payload: dict[str, object], burn_subtitles: bool = True) -> JellyfinClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return JellyfinClient("http://jf", "key", client=client)
+    return JellyfinClient(
+        "http://jf", "key", burn_subtitles=burn_subtitles, client=client
+    )
 
 
 async def test_search_series_parses_fields():
@@ -45,3 +47,96 @@ async def test_episodes_sorted_by_season_then_number():
     )
     eps = await c.episodes("s1")
     assert [(e.season, e.number) for e in eps] == [(1, 1), (1, 2), (2, 1)]
+
+
+def _ep_with_streams(streams: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "Id": "e1",
+        "ParentIndexNumber": 1,
+        "IndexNumber": 1,
+        "MediaStreams": streams,
+    }
+
+
+async def test_episodes_pick_english_subtitle_index():
+    c = _client(
+        {
+            "Items": [
+                _ep_with_streams(
+                    [
+                        {"Type": "Audio", "Index": 1, "Language": "eng"},
+                        {"Type": "Subtitle", "Index": 3, "Language": "spa"},
+                        {"Type": "Subtitle", "Index": 2, "Language": "eng"},
+                    ]
+                )
+            ]
+        }
+    )
+    eps = await c.episodes("s1")
+    assert eps[0].subtitle_index == 2
+
+
+async def test_episodes_prefer_full_default_over_forced_english_subtitle():
+    c = _client(
+        {
+            "Items": [
+                _ep_with_streams(
+                    [
+                        {
+                            "Type": "Subtitle",
+                            "Index": 4,
+                            "Language": "eng",
+                            "IsForced": True,
+                        },
+                        {
+                            "Type": "Subtitle",
+                            "Index": 5,
+                            "Language": "en",
+                            "IsDefault": True,
+                        },
+                    ]
+                )
+            ]
+        }
+    )
+    eps = await c.episodes("s1")
+    assert eps[0].subtitle_index == 5
+
+
+async def test_episodes_no_english_subtitle_is_none():
+    c = _client(
+        {
+            "Items": [
+                _ep_with_streams([{"Type": "Subtitle", "Index": 2, "Language": "spa"}])
+            ]
+        }
+    )
+    eps = await c.episodes("s1")
+    assert eps[0].subtitle_index is None
+
+
+async def test_burn_subtitles_off_ignores_streams():
+    c = _client(
+        {
+            "Items": [
+                _ep_with_streams([{"Type": "Subtitle", "Index": 2, "Language": "eng"}])
+            ]
+        },
+        burn_subtitles=False,
+    )
+    eps = await c.episodes("s1")
+    assert eps[0].subtitle_index is None
+
+
+def test_stream_url_direct_play_without_subtitle():
+    c = _client({})
+    assert c.stream_url("abc") == "http://jf/Videos/abc/stream?static=true&api_key=key"
+
+
+def test_stream_url_burns_subtitle_when_index_given():
+    c = _client({})
+    url = c.stream_url("abc", 2)
+    assert url == (
+        "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
+        "&SubtitleStreamIndex=2&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
+    )

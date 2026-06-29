@@ -52,7 +52,11 @@ async def _run() -> None:
         sasl_pass=settings.irc_sasl_pass,
         caps=VOICE_CAPS,
     )
-    jellyfin = JellyfinClient(settings.jellyfin_url, settings.jellyfin_api_key)
+    jellyfin = JellyfinClient(
+        settings.jellyfin_url,
+        settings.jellyfin_api_key,
+        burn_subtitles=settings.jellyfin_burn_subtitles,
+    )
     fallback = FallbackShow(jellyfin)
     publisher = Publisher(irc, settings, playlist, fallback)
     admins = {

@@ -51,7 +51,8 @@ class FallbackShow:
         if not self._episodes:
             return None
         ep = self._episodes[self._cursor]
-        return Resolved(media_url=self._jelly.stream_url(ep.id), title=self._label(ep))
+        url = self._jelly.stream_url(ep.id, ep.subtitle_index)
+        return Resolved(media_url=url, title=self._label(ep))
 
     def advance(self) -> None:
         if self._episodes:

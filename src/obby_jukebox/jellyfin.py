@@ -24,6 +24,7 @@ class Episode:
     season: int
     number: int
     title: str
+    subtitle_index: int | None = None  # English subtitle stream to burn in, if any
 
 
 def _as_str(value: object) -> str:
@@ -38,12 +39,33 @@ def _as_opt_int(value: object) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _english_subtitle_index(media_streams: object) -> int | None:
+    if not isinstance(media_streams, list):
+        return None
+    subs = [
+        s
+        for s in media_streams
+        if isinstance(s, dict)
+        and s.get("Type") == "Subtitle"
+        and _as_str(s.get("Language")).lower() in ("eng", "en")
+    ]
+    # Prefer a full (non-forced), default track: forced subs only cover foreign
+    # dialogue and would leave most of the show untitled.
+    subs.sort(key=lambda s: (bool(s.get("IsForced")), not bool(s.get("IsDefault"))))
+    return _as_opt_int(subs[0].get("Index")) if subs else None
+
+
 class JellyfinClient:
     def __init__(
-        self, base_url: str, api_key: str, client: httpx.AsyncClient | None = None
+        self,
+        base_url: str,
+        api_key: str,
+        burn_subtitles: bool = True,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._key = api_key
+        self._burn_subtitles = burn_subtitles
         self._client = client or httpx.AsyncClient(timeout=15)
 
     async def search_series(self, query: str, limit: int = 5) -> list[Series]:
@@ -66,19 +88,25 @@ class JellyfinClient:
         ]
 
     async def episodes(self, series_id: str) -> list[Episode]:
-        items = await self._items(
-            {
-                "Recursive": "true",
-                "ParentId": series_id,
-                "IncludeItemTypes": "Episode",
-            }
-        )
+        params = {
+            "Recursive": "true",
+            "ParentId": series_id,
+            "IncludeItemTypes": "Episode",
+        }
+        if self._burn_subtitles:
+            params["Fields"] = "MediaStreams"
+        items = await self._items(params)
         episodes = [
             Episode(
                 id=_as_str(it.get("Id")),
                 season=_as_int(it.get("ParentIndexNumber")),
                 number=_as_int(it.get("IndexNumber")),
                 title=_as_str(it.get("Name")),
+                subtitle_index=(
+                    _english_subtitle_index(it.get("MediaStreams"))
+                    if self._burn_subtitles
+                    else None
+                ),
             )
             for it in items
         ]
@@ -86,9 +114,20 @@ class JellyfinClient:
         episodes.sort(key=lambda e: (e.season, e.number))
         return episodes
 
-    def stream_url(self, item_id: str) -> str:
-        # static=true → direct play of the original file; ffmpeg decodes it.
-        return f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
+    def stream_url(self, item_id: str, subtitle_index: int | None = None) -> str:
+        if subtitle_index is None:
+            # static=true → direct play of the original file; ffmpeg decodes it.
+            return (
+                f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
+            )
+        # Burn the subtitle into the picture. SubtitleMethod=Encode forces a
+        # server-side video transcode (the only way to ship text over a raw
+        # WebRTC video track), re-muxed to mkv with codecs ffmpeg opens directly.
+        return (
+            f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}"
+            f"&Static=false&SubtitleStreamIndex={subtitle_index}"
+            "&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
+        )
 
     async def _items(self, params: dict[str, str]) -> list[dict[str, object]]:
         merged = {"api_key": self._key, **params}
