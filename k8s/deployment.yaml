@@ -84,7 +84,10 @@ spec:
               memory: 512Mi
             limits:
               cpu: "4"
-              memory: 2Gi
+              # Steady-state is ~250Mi, but a burn-in fallback (Jellyfin transcodes
+              # the episode to mkv and we decode it) spikes hard on connect; 2Gi
+              # OOM-killed mid-stream, so leave headroom.
+              memory: 3Gi
           volumeMounts:
             - name: ytdlp-cookies
               mountPath: /cookies
