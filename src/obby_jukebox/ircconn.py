@@ -151,6 +151,8 @@ class IrcClient:
             self._maybe_identify()
         elif cmd == "005":
             self._handle_isupport(line)
+        elif cmd in ("501", "472"):  # unknown/rejected MODE flag
+            logger.warning("server rejected a mode flag: %s", " ".join(line.params))
         elif cmd == "JOIN" and line.source:
             nick = line.hostmask.nickname
             chan = line.params[0] if line.params else ""
@@ -193,7 +195,9 @@ class IrcClient:
         # +B is "B" on essentially every server; don't gate on ISUPPORT BOT
         # since not all advertise it. Clearing privdeaf/regonly stops the server
         # dropping bot-cmds queries from users who aren't logged in.
-        self.send_raw(f"MODE {self.nick} +{self._bot_mode or 'B'}-DR")
+        mode = self._bot_mode or "B"
+        logger.info("marking self as a bot: MODE +%s-DR", mode)
+        self.send_raw(f"MODE {self.nick} +{mode}-DR")
         self._bot_mode_sent = True
 
     def _handle_cap(self, line: Line) -> None:

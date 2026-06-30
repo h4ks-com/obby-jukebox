@@ -15,7 +15,7 @@ from typing import Protocol
 
 from obby_jukebox.commands import COMMANDS, Command
 
-CAPS = ["draft/bot-cmds", "draft/bot-tools", "batch", "draft/message-ids"]
+CAPS = ["bot-mode", "draft/bot-cmds", "draft/bot-tools", "batch", "draft/message-ids"]
 
 # (sender, target, text, msgid, account) — matches CommandHandler.on_message.
 InvokeFn = Callable[[str, str, str, str | None, str | None], None]
