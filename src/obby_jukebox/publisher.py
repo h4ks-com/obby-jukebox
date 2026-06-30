@@ -15,6 +15,7 @@ import contextlib
 import logging
 from collections.abc import Coroutine
 
+import av
 from aiortc import (
     RTCConfiguration,
     RTCIceServer,
@@ -65,6 +66,7 @@ class Publisher:
         self._fallback_reload = asyncio.Event()
         self._seek = asyncio.Event()
         self._seek_target = 0.0
+        self._playing = False
         self._pc: RTCPeerConnection | None = None
         self._audio: JukeboxAudioTrack | None = None
         self._video: JukeboxVideoTrack | None = None
@@ -79,10 +81,15 @@ class Publisher:
     def skip(self) -> None:
         self._skip.set()
 
-    def seek(self, seconds: float) -> None:
-        """Jump the currently-playing item to an absolute offset; no-op when idle."""
+    def seek(self, seconds: float) -> bool:
+        """Jump the currently-playing item to an absolute offset. Returns False
+        when nothing is playing, so the caller can report that instead of a
+        misleading confirmation."""
+        if not self._playing:
+            return False
         self._seek_target = max(0.0, seconds)
         self._seek.set()
+        return True
 
     def reload_fallback(self) -> None:
         """Drop the fallback episode that's playing now so a `.show` change or
@@ -351,15 +358,24 @@ class Publisher:
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         offset = 0.0
         while True:
-            options = {"ss": str(offset)} if offset else None
+            url = resolved.media_url
+            server_seek = offset > 0 and resolved.seek_url is not None
+            if server_seek:
+                url = resolved.seek_url(offset)  # type: ignore[misc]
             try:
-                source = MediaPlayer(resolved.media_url, options=options)
+                source = MediaPlayer(url)
             except (OSError, ValueError) as e:
                 logger.warning("open failed for %s: %s", resolved.title, e)
                 self._set_idle()
                 return
+            # Direct sources (files, yt-dlp, static streams) seek the open
+            # demuxer; the worker rebases timestamps to zero so playback paces
+            # from the offset rather than waiting out the skipped span.
+            if offset > 0 and not server_seek:
+                _seek_player(source, offset)
             at = f" @ {offset:.0f}s" if offset else ""
             logger.info("now playing: %s%s", resolved.title, at)
+            self._playing = True
             try:
                 if self._audio is not None and source.audio is not None:
                     self._audio.set_source(source.audio)
@@ -376,8 +392,9 @@ class Publisher:
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
                 _stop_player(source)
+                self._playing = False
             if reason == "seek":
-                offset = self._seek_target  # re-open the same media at the new offset
+                offset = self._seek_target  # re-open the media at the new offset
                 continue
             self._set_idle()
             return
@@ -413,3 +430,12 @@ def _stop_player(source: MediaPlayer) -> None:
     for track in (source.audio, source.video):
         if track is not None:
             track.stop()
+
+
+def _seek_player(source: MediaPlayer, seconds: float) -> None:
+    """Seek the demuxer before its worker thread starts. aiortc exposes no seek,
+    so reach the InputContainer it opened; the worker then demuxes from here and
+    rebases timestamps to zero, so realtime pacing still starts at the offset."""
+    container = getattr(source, "_MediaPlayer__container", None)
+    if container is not None:
+        container.seek(int(seconds * av.time_base))

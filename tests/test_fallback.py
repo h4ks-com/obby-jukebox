@@ -162,6 +162,44 @@ async def test_set_movie_no_match_raises():
         await fb.set_movie("nope")
 
 
+async def test_peek_static_episode_has_no_server_seek():
+    fb = _fallback()  # EPISODES carry no subtitle → static stream, client-seeked
+    await fb.set_series("breaking", 1, 1)
+    resolved = fb.peek()
+    assert resolved is not None
+    assert resolved.seek_url is None
+
+
+async def test_peek_subtitle_burn_episode_seeks_server_side():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("IncludeItemTypes") == "Series":
+            return httpx.Response(200, json={"Items": SERIES})
+        return httpx.Response(
+            200,
+            json={
+                "Items": [
+                    {
+                        "Id": "e1",
+                        "ParentIndexNumber": 1,
+                        "IndexNumber": 1,
+                        "Name": "Pilot",
+                        "MediaStreams": [
+                            {"Type": "Subtitle", "Index": 3, "Language": "eng"}
+                        ],
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fb = FallbackShow(JellyfinClient("http://jf", "key", client=client))
+    await fb.set_series("breaking", 1, 1)
+    resolved = fb.peek()
+    assert resolved is not None
+    assert resolved.seek_url is not None
+    assert "StartTimeTicks=600000000" in resolved.seek_url(60)  # 60s, server-side
+
+
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured

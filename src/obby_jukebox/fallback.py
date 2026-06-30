@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from obby_jukebox.jellyfin import Episode, JellyfinClient, Movie, SeriesSummary
 from obby_jukebox.player import Resolved
@@ -88,7 +89,22 @@ class FallbackShow:
             return None
         ep = self._episodes[self._cursor]
         url = self._jelly.stream_url(ep.id, ep.subtitle_index)
-        return Resolved(media_url=url, title=self._label(ep))
+        return Resolved(
+            media_url=url, title=self._label(ep), seek_url=self._seek_url_for(ep)
+        )
+
+    def _seek_url_for(self, ep: Episode) -> Callable[[float], str] | None:
+        # A subtitle-burn transcode can't be seeked client-side, so hand back a
+        # builder that re-requests it at the offset; static streams (no burn)
+        # return None and let the publisher seek the open container.
+        if ep.subtitle_index is None:
+            return None
+        sub = ep.subtitle_index
+
+        def build(offset: float) -> str:
+            return self._jelly.stream_url(ep.id, sub, start_seconds=offset)
+
+        return build
 
     def advance(self) -> None:
         if self._episodes:

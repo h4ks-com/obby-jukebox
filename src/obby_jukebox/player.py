@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import uuid
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import yt_dlp
@@ -31,6 +31,12 @@ class Item:
 class Resolved:
     media_url: str
     title: str
+    # Server-side seek: given an offset in seconds, returns a fresh URL whose
+    # stream already starts there. Set only when the source can't be seeked
+    # client-side (a Jellyfin subtitle-burn transcode is produced sequentially,
+    # so the publisher re-opens this instead of seeking the demuxer). None means
+    # seek the open container directly (direct files, yt-dlp, static streams).
+    seek_url: Callable[[float], str] | None = None
 
 
 @dataclass

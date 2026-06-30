@@ -38,7 +38,7 @@ def create_app(
     playlist: Playlist,
     wake: Callable[[], None],
     skip: Callable[[], None],
-    seek: Callable[[float], None],
+    seek: Callable[[float], bool],
     api_key: str = "",
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
@@ -80,8 +80,11 @@ def create_app(
 
     @app.post("/seek", dependencies=[Depends(auth)])
     def do_seek(req: SeekRequest) -> dict[str, str]:
-        seek(req.seconds)
-        return {"status": "seeking", "seconds": str(req.seconds)}
+        armed = seek(req.seconds)
+        return {
+            "status": "seeking" if armed else "idle",
+            "seconds": str(req.seconds),
+        }
 
     @app.post("/clear", dependencies=[Depends(auth)])
     def clear() -> dict[str, str]:

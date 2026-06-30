@@ -143,6 +143,18 @@ def test_stream_url_burns_subtitle_when_index_given():
     )
 
 
+def test_stream_url_adds_start_time_ticks_when_seeking_transcode():
+    c = _client({})
+    url = c.stream_url("abc", 2, start_seconds=90)
+    assert url.endswith("&StartTimeTicks=900000000")  # 90s in 100ns ticks
+
+
+def test_stream_url_static_ignores_start_seconds():
+    c = _client({})
+    # A static (direct-play) stream is seeked client-side, so the URL is unchanged.
+    assert c.stream_url("abc", start_seconds=90) == c.stream_url("abc")
+
+
 async def test_season_episode_counts():
     c = _client(
         {

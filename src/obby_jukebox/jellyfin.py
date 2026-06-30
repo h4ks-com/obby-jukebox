@@ -180,21 +180,32 @@ class JellyfinClient:
             counts[season] = counts.get(season, 0) + 1
         return counts
 
-    def stream_url(self, item_id: str, subtitle_index: int | None = None) -> str:
+    def stream_url(
+        self,
+        item_id: str,
+        subtitle_index: int | None = None,
+        start_seconds: float = 0.0,
+    ) -> str:
         if subtitle_index is None:
-            # static=true → direct play of the original file; ffmpeg decodes it.
+            # static=true → direct play of the original file; ffmpeg decodes it
+            # and seeks it client-side via HTTP range, so start_seconds is unused.
             return (
                 f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
             )
         # Burn the subtitle into the picture. SubtitleMethod=Encode forces a
         # server-side video transcode (the only way to ship text over a raw
         # WebRTC video track), re-muxed to mkv with codecs ffmpeg opens directly.
-        # VideoBitrate is required for hardware (VAAPI) encoders to open.
+        # VideoBitrate is required for hardware (VAAPI) encoders to open. The
+        # transcode is produced sequentially and can't be seeked client-side, so
+        # StartTimeTicks (100ns units) makes the server begin it at the offset.
+        start = ""
+        if start_seconds > 0:
+            start = f"&StartTimeTicks={int(start_seconds * 10_000_000)}"
         return (
             f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}"
             f"&Static=false&SubtitleStreamIndex={subtitle_index}"
             "&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
-            f"&VideoBitrate={_BURN_VIDEO_BITRATE}"
+            f"&VideoBitrate={_BURN_VIDEO_BITRATE}{start}"
         )
 
     async def _items(self, params: dict[str, str]) -> list[dict[str, object]]:
