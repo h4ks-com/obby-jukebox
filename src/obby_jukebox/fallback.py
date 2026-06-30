@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 
 from obby_jukebox.jellyfin import Episode, JellyfinClient, Movie, SeriesSummary
@@ -102,7 +103,11 @@ class FallbackShow:
         sub = ep.subtitle_index
 
         def build(offset: float) -> str:
-            return self._jelly.stream_url(ep.id, sub, start_seconds=offset)
+            # A unique session per seek forces the server to start a new
+            # transcode at the offset rather than reusing the running one.
+            return self._jelly.stream_url(
+                ep.id, sub, start_seconds=offset, play_session_id=uuid.uuid4().hex
+            )
 
         return build
 

@@ -185,6 +185,7 @@ class JellyfinClient:
         item_id: str,
         subtitle_index: int | None = None,
         start_seconds: float = 0.0,
+        play_session_id: str = "",
     ) -> str:
         if subtitle_index is None:
             # static=true → direct play of the original file; ffmpeg decodes it
@@ -197,15 +198,19 @@ class JellyfinClient:
         # WebRTC video track), re-muxed to mkv with codecs ffmpeg opens directly.
         # VideoBitrate is required for hardware (VAAPI) encoders to open. The
         # transcode is produced sequentially and can't be seeked client-side, so
-        # StartTimeTicks (100ns units) makes the server begin it at the offset.
-        start = ""
+        # StartTimeTicks (100ns units) makes the server begin it at the offset —
+        # but only under a fresh PlaySessionId, else Jellyfin hands back the
+        # already-running transcode at its current position and ignores the seek.
+        extra = ""
         if start_seconds > 0:
-            start = f"&StartTimeTicks={int(start_seconds * 10_000_000)}"
+            extra += f"&StartTimeTicks={int(start_seconds * 10_000_000)}"
+        if play_session_id:
+            extra += f"&PlaySessionId={play_session_id}"
         return (
             f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}"
             f"&Static=false&SubtitleStreamIndex={subtitle_index}"
             "&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
-            f"&VideoBitrate={_BURN_VIDEO_BITRATE}{start}"
+            f"&VideoBitrate={_BURN_VIDEO_BITRATE}{extra}"
         )
 
     async def _items(self, params: dict[str, str]) -> list[dict[str, object]]:

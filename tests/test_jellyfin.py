@@ -149,6 +149,13 @@ def test_stream_url_adds_start_time_ticks_when_seeking_transcode():
     assert url.endswith("&StartTimeTicks=900000000")  # 90s in 100ns ticks
 
 
+def test_stream_url_carries_play_session_id_for_a_fresh_transcode():
+    c = _client({})
+    url = c.stream_url("abc", 2, start_seconds=90, play_session_id="sess1")
+    assert "StartTimeTicks=900000000" in url
+    assert url.endswith("&PlaySessionId=sess1")
+
+
 def test_stream_url_static_ignores_start_seconds():
     c = _client({})
     # A static (direct-play) stream is seeked client-side, so the URL is unchanged.

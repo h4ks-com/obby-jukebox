@@ -197,7 +197,9 @@ async def test_peek_subtitle_burn_episode_seeks_server_side():
     resolved = fb.peek()
     assert resolved is not None
     assert resolved.seek_url is not None
-    assert "StartTimeTicks=600000000" in resolved.seek_url(60)  # 60s, server-side
+    seek_url = resolved.seek_url(60)
+    assert "StartTimeTicks=600000000" in seek_url  # 60s, server-side
+    assert "PlaySessionId=" in seek_url  # fresh session so the seek isn't ignored
 
 
 def test_configured_reflects_api_key():
