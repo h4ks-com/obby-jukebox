@@ -1,5 +1,7 @@
 # obby-jukebox
 
+> Not a single line of code here was written by humans. Use it at your own risk.
+
 A community video jukebox for IRC. Queue links (anything `yt-dlp` supports) and they
 play back to back as a live video stream your IRC client can watch together.
 

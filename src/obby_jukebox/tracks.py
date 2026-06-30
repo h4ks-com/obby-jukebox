@@ -13,6 +13,7 @@ import asyncio
 import fractions
 import math
 import os
+import time
 
 import av
 import av.filter
@@ -26,6 +27,10 @@ _AUDIO_FORMAT = "s16"
 _AUDIO_PTIME = 0.020
 _AUDIO_SAMPLES = int(_AUDIO_RATE * _AUDIO_PTIME)
 _VIDEO_CLOCK = 90000
+
+# A stalled source would otherwise block recv() forever and freeze the encoder;
+# past this the track falls back to silence / the idle card.
+_SOURCE_RECV_TIMEOUT = 1.0
 
 # Visualizer shown for audio-only items (an mp3 has no video track, so without
 # this the channel would sit on the static idle card while sound plays).
@@ -66,6 +71,7 @@ class JukeboxAudioTrack(MediaStreamTrack):
         self._resampler = self._new_resampler()
         self._buffer: list[av.AudioFrame] = []
         self._pts = 0
+        self.last_frame_at = 0.0
 
     @staticmethod
     def _new_resampler() -> av.AudioResampler:
@@ -77,6 +83,7 @@ class JukeboxAudioTrack(MediaStreamTrack):
         self._source = track
         self._resampler = self._new_resampler()
         self._buffer.clear()
+        self.last_frame_at = time.monotonic()
 
     def clear_source(self) -> None:
         self._source = None
@@ -98,11 +105,14 @@ class JukeboxAudioTrack(MediaStreamTrack):
                 await asyncio.sleep(_AUDIO_PTIME)
                 return _silent_frame()
             try:
-                raw = await source.recv()
+                raw = await asyncio.wait_for(source.recv(), _SOURCE_RECV_TIMEOUT)
+            except TimeoutError:
+                return _silent_frame()
             except MediaStreamError:
                 self._source = None
                 continue
             if isinstance(raw, av.AudioFrame):
+                self.last_frame_at = time.monotonic()
                 self._buffer.extend(self._resampler.resample(raw))
         return self._buffer.pop(0)
 
@@ -139,9 +149,11 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._bars = [0.0] * _VIS_BARS
         self._vis_tick = 0
         self._bar_colors = [_bar_color(i) for i in range(_VIS_BARS)]
+        self.last_frame_at = 0.0
 
     def set_source(self, track: MediaStreamTrack) -> None:
         self._source = track
+        self.last_frame_at = time.monotonic()
 
     def clear_source(self) -> None:
         self._source = None
@@ -162,11 +174,14 @@ class JukeboxVideoTrack(MediaStreamTrack):
         frame: av.VideoFrame | None = None
         if source is not None:
             try:
-                raw = await source.recv()
+                raw = await asyncio.wait_for(source.recv(), _SOURCE_RECV_TIMEOUT)
+            except TimeoutError:
+                raw = None
             except MediaStreamError:
                 self._source = None
                 raw = None
             if isinstance(raw, av.VideoFrame):
+                self.last_frame_at = time.monotonic()
                 frame = self._letterbox(raw)
         if frame is None:
             await asyncio.sleep(self._frame_time)

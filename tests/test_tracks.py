@@ -1,10 +1,21 @@
 import array
+import asyncio
 import math
 
 import av
+from aiortc import MediaStreamTrack
+from aiortc.mediastreams import MediaStreamError
 
 from obby_jukebox import tracks
 from obby_jukebox.tracks import AudioMeter, JukeboxAudioTrack, JukeboxVideoTrack
+
+
+class _StalledSource(MediaStreamTrack):
+    kind = "video"
+
+    async def recv(self) -> av.VideoFrame:
+        await asyncio.sleep(3600)
+        raise MediaStreamError
 
 
 def _tone_frame(amplitude: int, samples: int = 960) -> av.AudioFrame:
@@ -84,6 +95,17 @@ def test_video_letterbox_keeps_fixed_output_size():
     assert wide.format.name == "yuv420p"
     tall = track._letterbox(av.VideoFrame(100, 320, "yuv420p"))
     assert (tall.width, tall.height) == (640, 360)
+
+
+async def test_video_recv_falls_back_to_idle_when_source_stalls():
+    track = JukeboxVideoTrack(320, 240, fps=30, meter=AudioMeter())
+    track.set_source(_StalledSource())
+    started_at = track.last_frame_at
+    frame = await asyncio.wait_for(
+        track.recv(), timeout=tracks._SOURCE_RECV_TIMEOUT + 2
+    )
+    assert (frame.width, frame.height) == (320, 240)
+    assert track.last_frame_at == started_at  # no real frame ever arrived
 
 
 async def test_video_track_emits_fallback_without_source():

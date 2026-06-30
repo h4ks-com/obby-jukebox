@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Coroutine
 
 from aiortc import (
@@ -43,6 +44,10 @@ logger = logging.getLogger(__name__)
 # Hard ceiling on a single resolve so a pathological URL (e.g. a whole channel
 # yt-dlp tries to enumerate) can never wedge the media loop.
 _RESOLVE_TIMEOUT = 30
+
+# A source that delivers no frame for this long is treated as dead and skipped,
+# so a stalled stream can't freeze the channel on one item forever.
+_STALL_TIMEOUT = 8.0
 
 
 class Publisher:
@@ -396,8 +401,17 @@ class Publisher:
                 self.playlist.upcoming() or self._fallback_reload.is_set()
             ):
                 return "preempt"
+            if self._stalled():
+                logger.warning("source stalled for %.0fs; skipping", _STALL_TIMEOUT)
+                return "stalled"
             await asyncio.sleep(0.5)
         return "ended"
+
+    def _stalled(self) -> bool:
+        if self._audio is None or self._video is None:
+            return False
+        latest = max(self._audio.last_frame_at, self._video.last_frame_at)
+        return latest > 0 and time.monotonic() - latest > _STALL_TIMEOUT
 
 
 def _ignore_result(task: asyncio.Task[Resolved]) -> None:
