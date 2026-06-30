@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import subprocess
 from collections.abc import Coroutine
 
 from aiortc import (
@@ -66,7 +65,6 @@ class Publisher:
         self._fallback_reload = asyncio.Event()
         self._seek = asyncio.Event()
         self._seek_target = 0.0
-        self._playing = False
         self._pc: RTCPeerConnection | None = None
         self._audio: JukeboxAudioTrack | None = None
         self._video: JukeboxVideoTrack | None = None
@@ -81,15 +79,10 @@ class Publisher:
     def skip(self) -> None:
         self._skip.set()
 
-    def seek(self, seconds: float) -> bool:
-        """Jump the currently-playing item to an absolute offset. Returns False
-        when nothing is playing, so the caller can report that instead of a
-        misleading confirmation."""
-        if not self._playing:
-            return False
+    def seek(self, seconds: float) -> None:
+        """Jump the currently-playing item to an absolute offset; no-op when idle."""
         self._seek_target = max(0.0, seconds)
         self._seek.set()
-        return True
 
     def reload_fallback(self) -> None:
         """Drop the fallback episode that's playing now so a `.show` change or
@@ -358,33 +351,33 @@ class Publisher:
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         offset = 0.0
         while True:
-            opened = await asyncio.to_thread(_open_source, resolved, offset)
-            if opened is None:
+            options = {"ss": str(offset)} if offset else None
+            try:
+                source = MediaPlayer(resolved.media_url, options=options)
+            except (OSError, ValueError) as e:
+                logger.warning("open failed for %s: %s", resolved.title, e)
                 self._set_idle()
                 return
-            source, ffmpeg = opened
             at = f" @ {offset:.0f}s" if offset else ""
             logger.info("now playing: %s%s", resolved.title, at)
-            self._playing = True
             try:
                 if self._audio is not None and source.audio is not None:
                     self._audio.set_source(source.audio)
-                if self._video is not None and source.video is not None:
-                    self._video.set_source(source.video)
-                    self._video.hide_visualizer()
-                elif self._video is not None:
-                    # Audio-only item: the bars stand in for the missing picture.
-                    self._video.clear_source()
-                    self._video.show_visualizer()
+                if self._video is not None:
+                    if source.video is not None:
+                        self._video.set_source(source.video)
+                        self._video.hide_visualizer()
+                    else:
+                        # Audio-only item: drop any stale video source and let
+                        # the bars stand in for the missing picture.
+                        self._video.clear_source()
+                        self._video.show_visualizer()
                 self._send({"type": "video", "state": "on"})
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
                 _stop_player(source)
-                if ffmpeg is not None:
-                    _stop_ffmpeg(ffmpeg)
-                self._playing = False
             if reason == "seek":
-                offset = self._seek_target
+                offset = self._seek_target  # re-open the same media at the new offset
                 continue
             self._set_idle()
             return
@@ -405,71 +398,6 @@ class Publisher:
                 return "preempt"
             await asyncio.sleep(0.5)
         return "ended"
-
-
-def _open_source(
-    resolved: Resolved, offset: float
-) -> tuple[MediaPlayer, subprocess.Popen[bytes] | None] | None:
-    """Open a media source positioned at `offset` seconds, returning it with any
-    ffmpeg process to reap. Jellyfin serves the stream pre-seeked (open the URL
-    directly); everything else has ffmpeg seek the input and stream a fresh
-    container from zero, so the decode worker never seeks mid-stream — which
-    stalls some sources. Runs in a worker thread: opening does blocking I/O."""
-    if offset <= 0:
-        player = _open_player(resolved.media_url)
-        return (player, None) if player is not None else None
-    if resolved.seek_url is not None:
-        player = _open_player(resolved.seek_url(offset))
-        return (player, None) if player is not None else None
-    try:
-        ffmpeg = subprocess.Popen(
-            _ffmpeg_seek_cmd(resolved.media_url, offset), stdout=subprocess.PIPE
-        )
-    except OSError as e:
-        logger.warning("ffmpeg seek failed to start: %s", e)
-        return None
-    player = _open_player(ffmpeg.stdout, fmt="matroska")
-    if player is None:
-        _stop_ffmpeg(ffmpeg)
-        return None
-    return (player, ffmpeg)
-
-
-def _open_player(source: object, *, fmt: str | None = None) -> MediaPlayer | None:
-    try:
-        return MediaPlayer(source, format=fmt)
-    except (OSError, ValueError) as e:
-        logger.warning("open failed: %s", e)
-        return None
-
-
-def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
-    # -ss before -i is an input seek (fast, keyframe-accurate); -c copy avoids a
-    # re-encode; rw_timeout bounds a stalled network read so ffmpeg exits instead
-    # of hanging the pipe.
-    return [
-        "ffmpeg",
-        "-nostdin",
-        "-loglevel",
-        "error",
-        "-rw_timeout",
-        "20000000",
-        "-ss",
-        f"{offset:.3f}",
-        "-i",
-        url,
-        "-c",
-        "copy",
-        "-f",
-        "matroska",
-        "pipe:1",
-    ]
-
-
-def _stop_ffmpeg(proc: subprocess.Popen[bytes]) -> None:
-    proc.kill()
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        proc.wait(timeout=2)
 
 
 def _ignore_result(task: asyncio.Task[Resolved]) -> None:

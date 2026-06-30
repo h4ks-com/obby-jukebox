@@ -127,7 +127,7 @@ class CommandHandler:
         channel: str,
         wake: Callable[[], None],
         skip: Callable[[], None],
-        seek: Callable[[float], bool],
+        seek: Callable[[float], None],
         reload_fallback: Callable[[], None],
         fallback: FallbackShow,
         admins: set[str],
@@ -370,9 +370,7 @@ class CommandHandler:
         if seconds is None:
             self._reply("usage: .seek <sec | mm:ss | hh:mm:ss>")
             return
-        if not self.seek(float(seconds)):
-            self._reply(irctext.color("nothing playing to seek", irctext.GREY))
-            return
+        self.seek(float(seconds))
         self._reply(f"seek → {irctext.bold(_fmt_duration(seconds))}")
 
     async def _search(self, query: str) -> None:

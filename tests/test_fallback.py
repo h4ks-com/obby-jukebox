@@ -162,50 +162,6 @@ async def test_set_movie_no_match_raises():
         await fb.set_movie("nope")
 
 
-async def test_peek_static_episode_seeks_server_side_without_subtitle():
-    fb = _fallback()  # EPISODES carry no subtitle → direct play, but seek transcodes
-    await fb.set_series("breaking", 1, 1)
-    resolved = fb.peek()
-    assert resolved is not None
-    assert resolved.seek_url is not None
-    seek_url = resolved.seek_url(30)
-    assert "stream.mkv" in seek_url  # seek switches the direct item to a transcode
-    assert "StartTimeTicks=300000000" in seek_url
-    assert "SubtitleStreamIndex" not in seek_url
-
-
-async def test_peek_subtitle_burn_episode_seeks_server_side():
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.params.get("IncludeItemTypes") == "Series":
-            return httpx.Response(200, json={"Items": SERIES})
-        return httpx.Response(
-            200,
-            json={
-                "Items": [
-                    {
-                        "Id": "e1",
-                        "ParentIndexNumber": 1,
-                        "IndexNumber": 1,
-                        "Name": "Pilot",
-                        "MediaStreams": [
-                            {"Type": "Subtitle", "Index": 3, "Language": "eng"}
-                        ],
-                    }
-                ]
-            },
-        )
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fb = FallbackShow(JellyfinClient("http://jf", "key", client=client))
-    await fb.set_series("breaking", 1, 1)
-    resolved = fb.peek()
-    assert resolved is not None
-    assert resolved.seek_url is not None
-    seek_url = resolved.seek_url(60)
-    assert "StartTimeTicks=600000000" in seek_url  # 60s, server-side
-    assert "PlaySessionId=" in seek_url  # fresh session so the seek isn't ignored
-
-
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured

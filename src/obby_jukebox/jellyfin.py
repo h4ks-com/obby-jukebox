@@ -180,33 +180,22 @@ class JellyfinClient:
             counts[season] = counts.get(season, 0) + 1
         return counts
 
-    def stream_url(
-        self,
-        item_id: str,
-        subtitle_index: int | None = None,
-        start_seconds: float = 0.0,
-        play_session_id: str = "",
-    ) -> str:
-        if subtitle_index is None and start_seconds <= 0:
+    def stream_url(self, item_id: str, subtitle_index: int | None = None) -> str:
+        if subtitle_index is None:
             # static=true → direct play of the original file; ffmpeg decodes it.
             return (
                 f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
             )
-        # A transcode is needed to burn subtitles and to seek: the server starts
-        # the stream at StartTimeTicks (100ns units), and a fresh PlaySessionId
-        # per request stops Jellyfin handing back a running transcode at its
-        # current position. VideoBitrate is required for VAAPI encoders.
-        url = (
-            f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}&Static=false"
+        # Burn the subtitle into the picture. SubtitleMethod=Encode forces a
+        # server-side video transcode (the only way to ship text over a raw
+        # WebRTC video track), re-muxed to mkv with codecs ffmpeg opens directly.
+        # VideoBitrate is required for hardware (VAAPI) encoders to open.
+        return (
+            f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}"
+            f"&Static=false&SubtitleStreamIndex={subtitle_index}"
+            "&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
+            f"&VideoBitrate={_BURN_VIDEO_BITRATE}"
         )
-        if subtitle_index is not None:
-            url += f"&SubtitleStreamIndex={subtitle_index}&SubtitleMethod=Encode"
-        url += f"&VideoCodec=h264&AudioCodec=aac&VideoBitrate={_BURN_VIDEO_BITRATE}"
-        if start_seconds > 0:
-            url += f"&StartTimeTicks={int(start_seconds * 10_000_000)}"
-        if play_session_id:
-            url += f"&PlaySessionId={play_session_id}"
-        return url
 
     async def _items(self, params: dict[str, str]) -> list[dict[str, object]]:
         merged = {"api_key": self._key, **params}

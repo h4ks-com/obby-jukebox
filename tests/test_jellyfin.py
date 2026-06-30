@@ -143,29 +143,6 @@ def test_stream_url_burns_subtitle_when_index_given():
     )
 
 
-def test_stream_url_adds_start_time_ticks_when_seeking_transcode():
-    c = _client({})
-    url = c.stream_url("abc", 2, start_seconds=90)
-    assert url.endswith("&StartTimeTicks=900000000")  # 90s in 100ns ticks
-
-
-def test_stream_url_carries_play_session_id_for_a_fresh_transcode():
-    c = _client({})
-    url = c.stream_url("abc", 2, start_seconds=90, play_session_id="sess1")
-    assert "StartTimeTicks=900000000" in url
-    assert url.endswith("&PlaySessionId=sess1")
-
-
-def test_stream_url_seeking_a_direct_item_switches_to_transcode():
-    c = _client({})
-    # No subtitle but seeking: a direct stream can't be seeked server-side, so
-    # the seek re-requests a (subtitle-free) transcode beginning at the offset.
-    url = c.stream_url("abc", start_seconds=90)
-    assert "stream.mkv" in url and "Static=false" in url
-    assert "SubtitleStreamIndex" not in url
-    assert "StartTimeTicks=900000000" in url
-
-
 async def test_season_episode_counts():
     c = _client(
         {

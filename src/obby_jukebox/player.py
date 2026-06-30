@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import uuid
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import yt_dlp
@@ -31,9 +31,6 @@ class Item:
 class Resolved:
     media_url: str
     title: str
-    # Set for Jellyfin, which seeks server-side; None for direct sources, which
-    # ffmpeg seeks on the way in.
-    seek_url: Callable[[float], str] | None = None
 
 
 @dataclass

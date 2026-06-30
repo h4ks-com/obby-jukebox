@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from collections.abc import Callable
 
 from obby_jukebox.jellyfin import Episode, JellyfinClient, Movie, SeriesSummary
 from obby_jukebox.player import Resolved
@@ -90,20 +88,7 @@ class FallbackShow:
             return None
         ep = self._episodes[self._cursor]
         url = self._jelly.stream_url(ep.id, ep.subtitle_index)
-        return Resolved(
-            media_url=url, title=self._label(ep), seek_url=self._seek_url_for(ep)
-        )
-
-    def _seek_url_for(self, ep: Episode) -> Callable[[float], str]:
-        def build(offset: float) -> str:
-            return self._jelly.stream_url(
-                ep.id,
-                ep.subtitle_index,
-                start_seconds=offset,
-                play_session_id=uuid.uuid4().hex,
-            )
-
-        return build
+        return Resolved(media_url=url, title=self._label(ep))
 
     def advance(self) -> None:
         if self._episodes:

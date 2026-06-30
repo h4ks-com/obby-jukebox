@@ -75,17 +75,13 @@ def _handler(
     def fake_search(query: str, cookies: str, limit: int) -> list[YtResult]:
         return yt_results or []
 
-    def fake_seek(seconds: float) -> bool:
-        seeked.append(seconds)
-        return True
-
     handler = CommandHandler(
         irc,
         playlist,
         channel,
         lambda: woke.append(True),
         lambda: skipped.append(True),
-        fake_seek,
+        seeked.append,
         lambda: reloaded.append(True),
         fallback,
         admins or set(),
@@ -263,7 +259,7 @@ def test_show_unavailable_without_jellyfin():
         "$jukebox",
         lambda: None,
         lambda: None,
-        lambda s: True,
+        lambda s: None,
         lambda: None,
         fallback,
         {"mattf"},
@@ -308,25 +304,6 @@ def test_seek_rejects_garbage():
     h.handler.on_message("alice", "$jukebox", ".seek soon")
     assert h.seeked == []
     assert "usage" in h.irc.sent[-1][1].lower()
-
-
-def test_seek_reports_nothing_playing():
-    irc = FakeIrc()
-    handler = CommandHandler(
-        irc,
-        Playlist(),
-        "$jukebox",
-        lambda: None,
-        lambda: None,
-        lambda s: False,  # publisher: nothing is playing
-        lambda: None,
-        FallbackShow(_jellyfin()),
-        set(),
-        SearchCache(),
-        spawn=lambda c: None,
-    )
-    handler.on_message("alice", "$jukebox", ".seek 30")
-    assert "nothing playing" in irc.sent[-1][1]
 
 
 async def test_movie_sets_fallback_without_episode_label():

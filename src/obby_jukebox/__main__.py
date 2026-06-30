@@ -72,10 +72,9 @@ async def _run() -> None:
         if live["publisher"] is not None:
             live["publisher"].skip()
 
-    def seek(seconds: float) -> bool:
+    def seek(seconds: float) -> None:
         if live["publisher"] is not None:
-            return live["publisher"].seek(seconds)
-        return False
+            live["publisher"].seek(seconds)
 
     app = create_app(playlist, wake, skip, seek, api_key=settings.api_key)
     server = uvicorn.Server(
