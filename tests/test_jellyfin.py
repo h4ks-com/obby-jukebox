@@ -156,6 +156,28 @@ async def test_season_episode_counts():
     assert await c.season_episode_counts("s1") == {1: 2, 2: 1}
 
 
+async def test_search_movies_parses_fields_and_subtitle():
+    c = _client(
+        {
+            "Items": [
+                {
+                    "Id": "m1",
+                    "Name": "Inception",
+                    "ProductionYear": 2010,
+                    "MediaStreams": [
+                        {"Type": "Subtitle", "Index": 2, "Language": "eng"}
+                    ],
+                }
+            ]
+        }
+    )
+    movies = await c.search_movies("inception")
+    assert movies[0].id == "m1"
+    assert movies[0].name == "Inception"
+    assert movies[0].year == 2010
+    assert movies[0].subtitle_index == 2
+
+
 def test_configured_tracks_api_key():
     assert _client({}).configured
     assert not JellyfinClient("http://jf", "").configured

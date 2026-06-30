@@ -9,6 +9,7 @@ from obby_jukebox.jellyfin import JellyfinClient
 from obby_jukebox.player import Playlist, SearchCache, YtResult
 
 SERIES = [{"Id": "s1", "Name": "Breaking Bad", "ProductionYear": 2008}]
+MOVIES = [{"Id": "m1", "Name": "Inception", "ProductionYear": 2010}]
 EPISODES = [
     {"Id": "e1", "ParentIndexNumber": 1, "IndexNumber": 1, "Name": "Pilot"},
     {"Id": "e2", "ParentIndexNumber": 1, "IndexNumber": 2, "Name": "Cat's in the Bag"},
@@ -31,8 +32,11 @@ class FakeIrc:
 
 def _jellyfin() -> JellyfinClient:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.params.get("IncludeItemTypes") == "Series":
+        itype = request.url.params.get("IncludeItemTypes")
+        if itype == "Series":
             return httpx.Response(200, json={"Items": SERIES})
+        if itype == "Movie":
+            return httpx.Response(200, json={"Items": MOVIES})
         return httpx.Response(200, json={"Items": EPISODES})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -49,6 +53,7 @@ class Harness(NamedTuple):
     fallback: FallbackShow
     coros: list[Coroutine[object, object, None]]
     search_cache: SearchCache
+    seeked: list[float]
 
 
 def _handler(
@@ -64,6 +69,7 @@ def _handler(
     woke: list[bool] = []
     skipped: list[bool] = []
     reloaded: list[bool] = []
+    seeked: list[float] = []
     coros: list[Coroutine[object, object, None]] = []
 
     def fake_search(query: str, cookies: str, limit: int) -> list[YtResult]:
@@ -75,6 +81,7 @@ def _handler(
         channel,
         lambda: woke.append(True),
         lambda: skipped.append(True),
+        seeked.append,
         lambda: reloaded.append(True),
         fallback,
         admins or set(),
@@ -83,7 +90,7 @@ def _handler(
         spawn=coros.append,
     )
     return Harness(
-        handler, irc, playlist, woke, skipped, reloaded, fallback, coros, cache
+        handler, irc, playlist, woke, skipped, reloaded, fallback, coros, cache, seeked
     )
 
 
@@ -252,6 +259,7 @@ def test_show_unavailable_without_jellyfin():
         "$jukebox",
         lambda: None,
         lambda: None,
+        lambda s: None,
         lambda: None,
         fallback,
         {"mattf"},
@@ -281,3 +289,42 @@ async def test_now_reports_fallback_when_idle():
     h.irc.sent.clear()
     h.handler.on_message("alice", "$jukebox", ".now")
     assert "Breaking Bad" in h.irc.sent[-1][1]
+
+
+def test_seek_accepts_seconds_and_timecodes():
+    h = _handler()
+    h.handler.on_message("alice", "$jukebox", ".seek 90")
+    h.handler.on_message("alice", "$jukebox", ".seek 1:30")
+    h.handler.on_message("alice", "$jukebox", ".seek 1:00:00")
+    assert h.seeked == [90.0, 90.0, 3600.0]
+
+
+def test_seek_rejects_garbage():
+    h = _handler()
+    h.handler.on_message("alice", "$jukebox", ".seek soon")
+    assert h.seeked == []
+    assert "usage" in h.irc.sent[-1][1].lower()
+
+
+async def test_movie_sets_fallback_without_episode_label():
+    h = _handler(admins={"mattf"})
+    h.handler.on_message("mattf", "$jukebox", ".movie inception", account="mattf")
+    await h.coros[0]
+    assert h.fallback.active
+    assert "Inception" in h.fallback.status()
+    assert h.reloaded == [True]
+    assert "S0" not in (h.fallback.now_label() or "")  # a movie carries no SxxExx
+
+
+async def test_moviesearch_lists_matches():
+    h = _handler(admins={"mattf"})
+    h.handler.on_message("mattf", "$jukebox", ".moviesearch inception", account="mattf")
+    await h.coros[0]
+    assert "Inception" in h.irc.sent[-1][1]
+
+
+def test_moviesearch_requires_admin():
+    h = _handler(admins={"mattf"})
+    h.handler.on_message("eve", "$jukebox", ".moviesearch inception", account="eve")
+    assert h.coros == []
+    assert "admins only" in h.irc.sent[-1][1]

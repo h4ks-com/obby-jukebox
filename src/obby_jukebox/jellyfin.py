@@ -32,6 +32,14 @@ class SeriesSummary:
 
 
 @dataclass
+class Movie:
+    id: str
+    name: str
+    year: int | None
+    subtitle_index: int | None = None
+
+
+@dataclass
 class Episode:
     id: str
     season: int
@@ -100,6 +108,33 @@ class JellyfinClient:
                 id=_as_str(it.get("Id")),
                 name=_as_str(it.get("Name")) or "?",
                 year=_as_opt_int(it.get("ProductionYear")),
+            )
+            for it in items
+        ]
+
+    async def search_movies(self, query: str, limit: int = 5) -> list[Movie]:
+        fields = (
+            "ProductionYear,MediaStreams" if self._burn_subtitles else "ProductionYear"
+        )
+        items = await self._items(
+            {
+                "Recursive": "true",
+                "IncludeItemTypes": "Movie",
+                "SearchTerm": query,
+                "Limit": str(limit),
+                "Fields": fields,
+            }
+        )
+        return [
+            Movie(
+                id=_as_str(it.get("Id")),
+                name=_as_str(it.get("Name")) or "?",
+                year=_as_opt_int(it.get("ProductionYear")),
+                subtitle_index=(
+                    _english_subtitle_index(it.get("MediaStreams"))
+                    if self._burn_subtitles
+                    else None
+                ),
             )
             for it in items
         ]

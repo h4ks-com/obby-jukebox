@@ -63,6 +63,8 @@ class Publisher:
         self._skip = asyncio.Event()
         self._wake = asyncio.Event()
         self._fallback_reload = asyncio.Event()
+        self._seek = asyncio.Event()
+        self._seek_target = 0.0
         self._pc: RTCPeerConnection | None = None
         self._audio: JukeboxAudioTrack | None = None
         self._video: JukeboxVideoTrack | None = None
@@ -76,6 +78,11 @@ class Publisher:
 
     def skip(self) -> None:
         self._skip.set()
+
+    def seek(self, seconds: float) -> None:
+        """Jump the currently-playing item to an absolute offset; no-op when idle."""
+        self._seek_target = max(0.0, seconds)
+        self._seek.set()
 
     def reload_fallback(self) -> None:
         """Drop the fallback episode that's playing now so a `.show` change or
@@ -273,6 +280,7 @@ class Publisher:
     async def _media_loop(self) -> None:
         while True:
             self._skip.clear()
+            self._seek.clear()  # a seek only applies to the item it was issued for
             item = self.playlist.take_next()
             if item is None:
                 await self._play_fallback_or_idle()
@@ -338,35 +346,48 @@ class Publisher:
             return None
 
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
-        try:
-            source = MediaPlayer(resolved.media_url)
-        except (OSError, ValueError) as e:
-            logger.warning("open failed for %s: %s", resolved.title, e)
-            return
-        logger.info("now playing: %s", resolved.title)
-        try:
-            if self._audio is not None and source.audio is not None:
-                self._audio.set_source(source.audio)
-            if self._video is not None and source.video is not None:
-                self._video.set_source(source.video)
-            self._send({"type": "video", "state": "on"})
-            await self._await_end(source, interruptible=interruptible)
-        finally:
+        offset = 0.0
+        while True:
+            options = {"ss": str(offset)} if offset else None
+            try:
+                source = MediaPlayer(resolved.media_url, options=options)
+            except (OSError, ValueError) as e:
+                logger.warning("open failed for %s: %s", resolved.title, e)
+                self._set_idle()
+                return
+            at = f" @ {offset:.0f}s" if offset else ""
+            logger.info("now playing: %s%s", resolved.title, at)
+            try:
+                if self._audio is not None and source.audio is not None:
+                    self._audio.set_source(source.audio)
+                if self._video is not None and source.video is not None:
+                    self._video.set_source(source.video)
+                self._send({"type": "video", "state": "on"})
+                reason = await self._await_end(source, interruptible=interruptible)
+            finally:
+                _stop_player(source)
+            if reason == "seek":
+                offset = self._seek_target  # re-open the same media at the new offset
+                continue
             self._set_idle()
-            _stop_player(source)
+            return
 
-    async def _await_end(self, source: MediaPlayer, *, interruptible: bool) -> None:
+    async def _await_end(self, source: MediaPlayer, *, interruptible: bool) -> str:
         track = source.video or source.audio
         while track is not None and track.readyState == "live":
+            if self._seek.is_set():
+                self._seek.clear()
+                return "seek"
             if self._skip.is_set():
-                return
+                return "skip"
             # A queued user request, or a .show change/off, preempts the
             # fallback show immediately (user items aren't interruptible).
             if interruptible and (
                 self.playlist.upcoming() or self._fallback_reload.is_set()
             ):
-                return
+                return "preempt"
             await asyncio.sleep(0.5)
+        return "ended"
 
 
 def _ignore_result(task: asyncio.Task[Resolved]) -> None:

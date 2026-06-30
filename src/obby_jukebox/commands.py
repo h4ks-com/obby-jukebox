@@ -15,7 +15,7 @@ from typing import Protocol
 
 from obby_jukebox import irctext
 from obby_jukebox.fallback import FallbackShow
-from obby_jukebox.jellyfin import SeriesSummary
+from obby_jukebox.jellyfin import Movie, SeriesSummary
 from obby_jukebox.player import (
     Playlist,
     QueueFull,
@@ -83,6 +83,24 @@ def _format_result(index: int, result: YtResult) -> str:
     return " · ".join(parts)
 
 
+def _format_movie(movie: Movie) -> str:
+    title = irctext.bold(movie.name)
+    if movie.year:
+        title += irctext.color(f" ({movie.year})", irctext.GREY)
+    return title
+
+
+def _parse_timecode(text: str) -> int | None:
+    """Seconds from `SS`, `MM:SS`, or `HH:MM:SS`; a bare number is seconds."""
+    parts = text.split(":")
+    if not 1 <= len(parts) <= 3 or not all(p.isdigit() for p in parts):
+        return None
+    total = 0
+    for part in parts:
+        total = total * 60 + int(part)
+    return total
+
+
 class ChannelClient(Protocol):
     nick: str
 
@@ -109,6 +127,7 @@ class CommandHandler:
         channel: str,
         wake: Callable[[], None],
         skip: Callable[[], None],
+        seek: Callable[[float], None],
         reload_fallback: Callable[[], None],
         fallback: FallbackShow,
         admins: set[str],
@@ -124,6 +143,7 @@ class CommandHandler:
         self.channel = channel
         self.wake = wake
         self.skip = skip
+        self.seek = seek
         self.reload_fallback = reload_fallback
         self.fallback = fallback
         self.admins = admins
@@ -158,6 +178,8 @@ class CommandHandler:
         elif cmd == "skip":
             self.skip()
             self._reply("skipped")
+        elif cmd == "seek":
+            self._do_seek(arg)
         elif cmd == "clear":
             self.playlist.clear()
             self._reply("queue cleared")
@@ -169,6 +191,10 @@ class CommandHandler:
             self._show(account, arg)
         elif cmd == "showsearch":
             self._showsearch(account, arg)
+        elif cmd == "movie":
+            self._movie(account, arg)
+        elif cmd == "moviesearch":
+            self._moviesearch(account, arg)
         elif cmd == "help":
             self._help()
 
@@ -256,10 +282,10 @@ class CommandHandler:
         b = irctext.bold
         self._reply_lines(
             [
-                f"{b('.yt')} <terms> · {b('.play')} <url|#> · {b('.skip')} · "
-                f"{b('.clear')} · {b('.now')} · {b('.queue')}",
-                f"admin: {b('.show')} <name> [SxxExx] · "
-                f"{b('.showsearch')} <name> · {b('.show off')}",
+                f"{b('.yt')} <terms> · {b('.play')} <url|#> · {b('.seek')} <t> · "
+                f"{b('.skip')} · {b('.clear')} · {b('.now')} · {b('.queue')}",
+                f"admin: {b('.show')} <name> [SxxExx] · {b('.showsearch')} <name> · "
+                f"{b('.movie')} <name> · {b('.moviesearch')} <name> · {b('.show off')}",
             ]
         )
 
@@ -297,6 +323,55 @@ class CommandHandler:
             self._reply("usage: .showsearch <name>")
             return
         self.spawn(self._search(arg))
+
+    def _movie(self, account: str | None, arg: str) -> None:
+        if not self._require_fallback(account):
+            return
+        if not arg:
+            self._reply("usage: .movie <name>")
+            return
+        self.spawn(self._set_movie(arg))
+
+    async def _set_movie(self, query: str) -> None:
+        try:
+            status = await self.fallback.set_movie(query)
+        except LookupError as e:
+            self._reply(irctext.color(str(e), irctext.RED))
+            return
+        except (OSError, ValueError) as e:
+            logger.warning("jellyfin set_movie failed: %s", e)
+            self._reply(irctext.color("could not load that movie", irctext.RED))
+            return
+        self.reload_fallback()
+        self._reply(status)
+
+    def _moviesearch(self, account: str | None, arg: str) -> None:
+        if not self._require_fallback(account):
+            return
+        if not arg:
+            self._reply("usage: .moviesearch <name>")
+            return
+        self.spawn(self._run_moviesearch(arg))
+
+    async def _run_moviesearch(self, query: str) -> None:
+        try:
+            movies = await self.fallback.search_movies(query, _SEARCH_PREVIEW)
+        except (OSError, ValueError) as e:
+            logger.warning("jellyfin movie search failed: %s", e)
+            self._reply(irctext.color("search failed", irctext.RED))
+            return
+        if not movies:
+            self._reply(irctext.color(f"no movies matching {query!r}", irctext.GREY))
+            return
+        self._reply_lines([_format_movie(m) for m in movies])
+
+    def _do_seek(self, arg: str) -> None:
+        seconds = _parse_timecode(arg)
+        if seconds is None:
+            self._reply("usage: .seek <sec | mm:ss | hh:mm:ss>")
+            return
+        self.seek(float(seconds))
+        self._reply(f"seek → {irctext.bold(_fmt_duration(seconds))}")
 
     async def _search(self, query: str) -> None:
         try:

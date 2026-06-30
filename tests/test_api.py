@@ -13,8 +13,9 @@ def ctx():
     pl = Playlist(maxlen=3)
     wake = MagicMock()
     skip = MagicMock()
-    client = TestClient(create_app(pl, wake, skip))
-    return SimpleNamespace(pl=pl, wake=wake, skip=skip, client=client)
+    seek = MagicMock()
+    client = TestClient(create_app(pl, wake, skip, seek))
+    return SimpleNamespace(pl=pl, wake=wake, skip=skip, seek=seek, client=client)
 
 
 def test_healthz_is_open(ctx):
@@ -45,9 +46,16 @@ def test_skip_and_clear(ctx):
     assert ctx.client.get("/queue").json()["upcoming"] == []
 
 
+def test_seek(ctx):
+    assert ctx.client.post("/seek", json={"seconds": 90}).json()["status"] == "seeking"
+    ctx.seek.assert_called_once_with(90.0)
+
+
 def test_api_key_enforced():
     pl = Playlist()
-    client = TestClient(create_app(pl, MagicMock(), MagicMock(), api_key="secret"))
+    client = TestClient(
+        create_app(pl, MagicMock(), MagicMock(), MagicMock(), api_key="secret")
+    )
     assert client.post("/queue", json={"url": "u"}).status_code == 401
     ok = client.post("/queue", json={"url": "u"}, headers={"X-API-Key": "secret"})
     assert ok.status_code == 201

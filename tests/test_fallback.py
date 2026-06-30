@@ -131,6 +131,37 @@ async def test_search_detailed_reports_season_counts():
     assert results[0].seasons == {1: 2, 2: 1}
 
 
+def _fallback_movies(movies: list[dict[str, object]] | None = None) -> FallbackShow:
+    found = (
+        [{"Id": "m1", "Name": "Inception", "ProductionYear": 2010}]
+        if movies is None
+        else movies
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("IncludeItemTypes") == "Movie":
+            return httpx.Response(200, json={"Items": found})
+        return httpx.Response(200, json={"Items": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return FallbackShow(JellyfinClient("http://jf", "key", client=client))
+
+
+async def test_set_movie_is_a_single_looping_item():
+    fb = _fallback_movies()
+    status = await fb.set_movie("inception")
+    assert "Inception" in status and "movie" in status
+    assert fb.now_label() == "Inception (2010)"  # no SxxExx for a movie
+    fb.advance()
+    assert fb.now_label() == "Inception (2010)"  # one item wraps onto itself
+
+
+async def test_set_movie_no_match_raises():
+    fb = _fallback_movies(movies=[])
+    with pytest.raises(LookupError):
+        await fb.set_movie("nope")
+
+
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured

@@ -26,6 +26,10 @@ class QueueOut(BaseModel):
     upcoming: list[ItemOut]
 
 
+class SeekRequest(BaseModel):
+    seconds: float
+
+
 def _out(item: Item) -> ItemOut:
     return ItemOut(id=item.id, url=item.url, title=item.title)
 
@@ -34,6 +38,7 @@ def create_app(
     playlist: Playlist,
     wake: Callable[[], None],
     skip: Callable[[], None],
+    seek: Callable[[float], None],
     api_key: str = "",
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
@@ -72,6 +77,11 @@ def create_app(
     def do_skip() -> dict[str, str]:
         skip()
         return {"status": "skipped"}
+
+    @app.post("/seek", dependencies=[Depends(auth)])
+    def do_seek(req: SeekRequest) -> dict[str, str]:
+        seek(req.seconds)
+        return {"status": "seeking", "seconds": str(req.seconds)}
 
     @app.post("/clear", dependencies=[Depends(auth)])
     def clear() -> dict[str, str]:
