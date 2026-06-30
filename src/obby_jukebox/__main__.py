@@ -13,6 +13,8 @@ import signal
 import uvicorn
 
 from obby_jukebox.api import create_app
+from obby_jukebox.bottools import CAPS as BOT_CAPS
+from obby_jukebox.bottools import BotTools
 from obby_jukebox.commands import CommandHandler
 from obby_jukebox.config import Settings
 from obby_jukebox.fallback import FallbackShow
@@ -24,6 +26,7 @@ from obby_jukebox.publisher import Publisher
 logger = logging.getLogger(__name__)
 
 VOICE_CAPS = ["message-tags", "server-time", "account-tag", "obsidianirc/voice"]
+CAPS = VOICE_CAPS + BOT_CAPS
 _MAX_BACKOFF = 60
 
 
@@ -103,12 +106,12 @@ async def _run() -> None:
             nick=settings.irc_nick,
             sasl_user=settings.irc_sasl_user,
             sasl_pass=settings.irc_sasl_pass,
-            caps=VOICE_CAPS,
+            caps=CAPS,
             register=settings.irc_register,
             register_email=settings.irc_register_email,
         )
         publisher = Publisher(irc, settings, playlist, fallback)
-        irc.on_message = CommandHandler(
+        handler = CommandHandler(
             irc,
             playlist,
             settings.voice_channel,
@@ -120,7 +123,9 @@ async def _run() -> None:
             admins,
             search_cache,
             cookies=settings.ytdlp_cookies,
-        ).on_message
+        )
+        irc.on_message = handler.on_message
+        irc.bottools = BotTools(irc, settings.voice_channel, ".", handler.on_message)
         live["publisher"] = publisher
 
         try:

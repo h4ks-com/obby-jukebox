@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from typing import Protocol
 
 from obby_jukebox import irctext
@@ -31,6 +32,38 @@ _SEARCH_PREVIEW = 5
 _YT_PREVIEW = 3
 _QUEUED_REACTION = "✅"
 _SXXEXX = re.compile(r"^[sS](\d{1,2})[eE](\d{1,3})$")
+
+
+@dataclass(frozen=True)
+class Command:
+    name: str
+    summary: str
+    args: str = ""  # empty when the command takes none
+    admin: bool = False
+
+
+# Single source of truth for both .help and the IRCv3 bot-cmds announcement.
+COMMANDS: list[Command] = [
+    Command("yt", "Search YouTube and list results.", "search terms"),
+    Command(
+        "play", "Queue a video by URL, or result N from your last search.", "url|N"
+    ),
+    Command("seek", "Jump within the current video.", "90 | 1:30 | 1:30:00"),
+    Command("skip", "Skip the current video."),
+    Command("now", "Show what's playing."),
+    Command("queue", "List the upcoming videos."),
+    Command("clear", "Empty the queue."),
+    Command("help", "List the commands."),
+    Command(
+        "show",
+        "Play a Jellyfin series (or 'off' to stop).",
+        "name [SxxExx]",
+        admin=True,
+    ),
+    Command("showsearch", "List matching Jellyfin series.", "name", admin=True),
+    Command("movie", "Play a Jellyfin movie on loop.", "name", admin=True),
+    Command("moviesearch", "List matching Jellyfin movies.", "name", admin=True),
+]
 
 
 def _summary_title(summary: SeriesSummary) -> str:
@@ -284,15 +317,13 @@ class CommandHandler:
         self._reply_lines(lines)
 
     def _help(self) -> None:
-        b = irctext.bold
-        self._reply_lines(
-            [
-                f"{b('.yt')} <terms> · {b('.play')} <url|#> · {b('.seek')} <t> · "
-                f"{b('.skip')} · {b('.clear')} · {b('.now')} · {b('.queue')}",
-                f"admin: {b('.show')} <name> [SxxExx] · {b('.showsearch')} <name> · "
-                f"{b('.movie')} <name> · {b('.moviesearch')} <name> · {b('.show off')}",
-            ]
-        )
+        def fmt(command: Command) -> str:
+            label = irctext.bold(f".{command.name}")
+            return f"{label} <{command.args}>" if command.args else label
+
+        user = " · ".join(fmt(c) for c in COMMANDS if not c.admin)
+        admin = " · ".join(fmt(c) for c in COMMANDS if c.admin)
+        self._reply_lines([user, f"admin: {admin}"])
 
     def _require_fallback(self, account: str | None) -> bool:
         if account is None or account.casefold() not in self.admins:

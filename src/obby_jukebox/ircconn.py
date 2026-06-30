@@ -9,6 +9,7 @@ import contextlib
 import logging
 import ssl
 from collections.abc import Callable
+from typing import Protocol
 
 from irctokens import Line, tokenise
 
@@ -17,6 +18,14 @@ logger = logging.getLogger(__name__)
 TagMsgHandler = Callable[[str, str, dict[str, str | None]], None]
 JoinHandler = Callable[[str, str], None]
 MessageHandler = Callable[[str, str, str, str | None, str | None], None]
+
+
+class BotHook(Protocol):
+    def handle_tagmsg(
+        self, sender: str, target: str, tags: dict[str, str | None]
+    ) -> bool: ...
+
+    def announce_changed(self, channel: str) -> None: ...
 
 
 def _escape_tag_value(value: str) -> str:
@@ -59,6 +68,7 @@ class IrcClient:
         self.on_tagmsg: TagMsgHandler | None = None
         self.on_join: JoinHandler | None = None
         self.on_message: MessageHandler | None = None
+        self.bottools: BotHook | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader: asyncio.StreamReader | None = None
         self._want: set[str] = set()
@@ -142,13 +152,20 @@ class IrcClient:
         elif cmd == "005":
             self._handle_isupport(line)
         elif cmd == "JOIN" and line.source:
+            nick = line.hostmask.nickname
             chan = line.params[0] if line.params else ""
             if self.on_join:
-                self.on_join(line.hostmask.nickname, chan)
+                self.on_join(nick, chan)
+            if self.bottools and chan and nick.casefold() == self.nick.casefold():
+                self.bottools.announce_changed(chan)
         elif cmd == "TAGMSG" and line.source:
+            nick = line.hostmask.nickname
             target = line.params[0] if line.params else ""
+            tags = dict(line.tags or {})
+            if self.bottools and self.bottools.handle_tagmsg(nick, target, tags):
+                return
             if self.on_tagmsg:
-                self.on_tagmsg(line.hostmask.nickname, target, dict(line.tags or {}))
+                self.on_tagmsg(nick, target, tags)
         elif cmd == "PRIVMSG" and line.source:
             target = line.params[0] if line.params else ""
             text = line.params[1] if len(line.params) > 1 else ""
@@ -173,7 +190,9 @@ class IrcClient:
     def _maybe_set_bot_mode(self) -> None:
         if self._bot_mode_sent or not self._bot_mode or not self.registered.is_set():
             return
-        self.send_raw(f"MODE {self.nick} +{self._bot_mode}")
+        # Clear privdeaf/regonly too, or the server drops bot-cmds queries from
+        # users who aren't logged in.
+        self.send_raw(f"MODE {self.nick} +{self._bot_mode}-DR")
         self._bot_mode_sent = True
 
     def _handle_cap(self, line: Line) -> None:
