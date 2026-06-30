@@ -152,11 +152,14 @@ class IrcClient:
                 self.nick = line.params[0]
             self.registered.set()
             self._maybe_set_bot_mode()
+            self._maybe_enable_persistence()
             self._maybe_identify()
         elif cmd == "005":
             self._handle_isupport(line)
         elif cmd in ("501", "472"):  # unknown/rejected MODE flag
             logger.warning("server rejected a mode flag: %s", " ".join(line.params))
+        elif cmd == "PERSISTENCE":
+            logger.info("persistence: %s", " ".join(line.params))
         elif cmd == "NICK" and line.source and line.params:
             if line.hostmask.nickname.casefold() == self.nick.casefold():
                 self.nick = line.params[0]
@@ -206,6 +209,14 @@ class IrcClient:
         logger.info("marking self as a bot: MODE +%s-DR", mode)
         self.send_raw(f"MODE {self.nick} +{mode}-DR")
         self._bot_mode_sent = True
+
+    def _maybe_enable_persistence(self) -> None:
+        """Keep our presence (channel membership, streamer slot) held by the
+        server across reconnects, so a pod restart never hands $tv to someone
+        else and a reconnecting session resumes instead of colliding."""
+        if "draft/persistence" in self.acked:
+            logger.info("enabling session persistence")
+            self.send_raw("PERSISTENCE SET ON")
 
     def _handle_cap(self, line: Line) -> None:
         sub = line.params[1].upper() if len(line.params) > 1 else ""

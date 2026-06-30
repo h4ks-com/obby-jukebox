@@ -161,3 +161,16 @@ def test_433_after_registration_does_not_rename():
     c.feed(":irc.h4ks.com 433 * jukebox :Nickname is already in use")
     assert c.nick == "jukebox"
     assert not any(s.startswith("NICK") for s in c.sent)
+
+
+def test_persistence_enabled_when_cap_is_acked():
+    c = Probe()
+    c.acked.add("draft/persistence")
+    c.feed(":irc.h4ks.com 001 jukebox :Welcome")
+    assert "PERSISTENCE SET ON" in c.sent
+
+
+def test_persistence_skipped_without_cap():
+    c = Probe()
+    c.feed(":irc.h4ks.com 001 jukebox :Welcome")
+    assert "PERSISTENCE SET ON" not in c.sent
