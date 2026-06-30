@@ -95,10 +95,6 @@ class FallbackShow:
         )
 
     def _seek_url_for(self, ep: Episode) -> Callable[[float], str]:
-        # Jellyfin items always seek server-side: a byte-seek of the direct
-        # stream desyncs audio and crashes aiortc's decoder, so the builder
-        # re-requests a transcode beginning at the offset. A unique session per
-        # seek stops the server reusing the running transcode at its position.
         def build(offset: float) -> str:
             return self._jelly.stream_url(
                 ep.id,

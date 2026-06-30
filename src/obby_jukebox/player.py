@@ -31,11 +31,8 @@ class Item:
 class Resolved:
     media_url: str
     title: str
-    # Server-side seek: given an offset in seconds, returns a fresh URL whose
-    # stream already starts there. Set only when the source can't be seeked
-    # client-side (a Jellyfin subtitle-burn transcode is produced sequentially,
-    # so the publisher re-opens this instead of seeking the demuxer). None means
-    # seek the open container directly (direct files, yt-dlp, static streams).
+    # Set for Jellyfin, which seeks server-side; None for direct sources, which
+    # ffmpeg seeks on the way in.
     seek_url: Callable[[float], str] | None = None
 
 

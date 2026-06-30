@@ -192,12 +192,10 @@ class JellyfinClient:
             return (
                 f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
             )
-        # A server-side transcode is needed to burn subtitles, and also to seek:
-        # the server produces the stream starting at StartTimeTicks (100ns units)
-        # so we never byte-seek the demuxer client-side, which desyncs audio on
-        # some containers and kills aiortc's all-streams decode. A fresh
-        # PlaySessionId per seek stops Jellyfin reusing a running transcode at
-        # its current position. VideoBitrate is required for VAAPI encoders.
+        # A transcode is needed to burn subtitles and to seek: the server starts
+        # the stream at StartTimeTicks (100ns units), and a fresh PlaySessionId
+        # per request stops Jellyfin handing back a running transcode at its
+        # current position. VideoBitrate is required for VAAPI encoders.
         url = (
             f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}&Static=false"
         )
