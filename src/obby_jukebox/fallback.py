@@ -94,19 +94,17 @@ class FallbackShow:
             media_url=url, title=self._label(ep), seek_url=self._seek_url_for(ep)
         )
 
-    def _seek_url_for(self, ep: Episode) -> Callable[[float], str] | None:
-        # A subtitle-burn transcode can't be seeked client-side, so hand back a
-        # builder that re-requests it at the offset; static streams (no burn)
-        # return None and let the publisher seek the open container.
-        if ep.subtitle_index is None:
-            return None
-        sub = ep.subtitle_index
-
+    def _seek_url_for(self, ep: Episode) -> Callable[[float], str]:
+        # Jellyfin items always seek server-side: a byte-seek of the direct
+        # stream desyncs audio and crashes aiortc's decoder, so the builder
+        # re-requests a transcode beginning at the offset. A unique session per
+        # seek stops the server reusing the running transcode at its position.
         def build(offset: float) -> str:
-            # A unique session per seek forces the server to start a new
-            # transcode at the offset rather than reusing the running one.
             return self._jelly.stream_url(
-                ep.id, sub, start_seconds=offset, play_session_id=uuid.uuid4().hex
+                ep.id,
+                ep.subtitle_index,
+                start_seconds=offset,
+                play_session_id=uuid.uuid4().hex,
             )
 
         return build

@@ -162,12 +162,16 @@ async def test_set_movie_no_match_raises():
         await fb.set_movie("nope")
 
 
-async def test_peek_static_episode_has_no_server_seek():
-    fb = _fallback()  # EPISODES carry no subtitle → static stream, client-seeked
+async def test_peek_static_episode_seeks_server_side_without_subtitle():
+    fb = _fallback()  # EPISODES carry no subtitle → direct play, but seek transcodes
     await fb.set_series("breaking", 1, 1)
     resolved = fb.peek()
     assert resolved is not None
-    assert resolved.seek_url is None
+    assert resolved.seek_url is not None
+    seek_url = resolved.seek_url(30)
+    assert "stream.mkv" in seek_url  # seek switches the direct item to a transcode
+    assert "StartTimeTicks=300000000" in seek_url
+    assert "SubtitleStreamIndex" not in seek_url
 
 
 async def test_peek_subtitle_burn_episode_seeks_server_side():

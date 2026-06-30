@@ -156,10 +156,14 @@ def test_stream_url_carries_play_session_id_for_a_fresh_transcode():
     assert url.endswith("&PlaySessionId=sess1")
 
 
-def test_stream_url_static_ignores_start_seconds():
+def test_stream_url_seeking_a_direct_item_switches_to_transcode():
     c = _client({})
-    # A static (direct-play) stream is seeked client-side, so the URL is unchanged.
-    assert c.stream_url("abc", start_seconds=90) == c.stream_url("abc")
+    # No subtitle but seeking: a direct stream can't be seeked server-side, so
+    # the seek re-requests a (subtitle-free) transcode beginning at the offset.
+    url = c.stream_url("abc", start_seconds=90)
+    assert "stream.mkv" in url and "Static=false" in url
+    assert "SubtitleStreamIndex" not in url
+    assert "StartTimeTicks=900000000" in url
 
 
 async def test_season_episode_counts():
