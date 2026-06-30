@@ -142,10 +142,14 @@ class IrcClient:
             self._handle_register_reply(line)
         elif cmd == "FAIL":
             self._handle_fail(line)
-        elif cmd == "433":  # nick in use during registration
+        elif cmd == "433" and not self.registered.is_set():  # nick in use
             self.nick = self.nick + "_"
             self.send_raw(f"NICK {self.nick}")
         elif cmd == "001":
+            # Authoritative nick: a 433 during registration may have left our
+            # local nick out of sync with what the server actually assigned.
+            if line.params:
+                self.nick = line.params[0]
             self.registered.set()
             self._maybe_set_bot_mode()
             self._maybe_identify()
@@ -153,6 +157,9 @@ class IrcClient:
             self._handle_isupport(line)
         elif cmd in ("501", "472"):  # unknown/rejected MODE flag
             logger.warning("server rejected a mode flag: %s", " ".join(line.params))
+        elif cmd == "NICK" and line.source and line.params:
+            if line.hostmask.nickname.casefold() == self.nick.casefold():
+                self.nick = line.params[0]
         elif cmd == "JOIN" and line.source:
             nick = line.hostmask.nickname
             chan = line.params[0] if line.params else ""

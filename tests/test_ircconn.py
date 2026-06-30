@@ -144,3 +144,20 @@ def test_rpl_loggedin_captures_account():
     c = Probe(register=True)
     c.feed(":srv 900 bot nick!u@h account-name :You are now logged in")
     assert c.account == "account-name"
+
+
+def test_001_adopts_the_server_assigned_nick():
+    c = Probe()
+    c.nick = "jukebox_"  # a 433 bumped our local nick during registration
+    c.feed(":irc.h4ks.com 001 jukebox :Welcome")
+    assert c.nick == "jukebox"
+    assert any(s.startswith("MODE jukebox +") for s in c.sent)
+
+
+def test_433_after_registration_does_not_rename():
+    c = Probe()
+    c.feed(":irc.h4ks.com 001 jukebox :Welcome")
+    c.sent.clear()
+    c.feed(":irc.h4ks.com 433 * jukebox :Nickname is already in use")
+    assert c.nick == "jukebox"
+    assert not any(s.startswith("NICK") for s in c.sent)
