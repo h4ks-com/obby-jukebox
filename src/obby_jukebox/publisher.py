@@ -17,6 +17,7 @@ import subprocess
 import time
 from collections.abc import Coroutine
 
+import av
 from aiortc import (
     RTCConfiguration,
     RTCIceServer,
@@ -49,6 +50,10 @@ _RESOLVE_TIMEOUT = 30
 # A source that delivers no frame for this long is treated as dead and skipped,
 # so a stalled stream can't freeze the channel on one item forever.
 _STALL_TIMEOUT = 8.0
+
+# Media failures that must skip the current item rather than kill the single
+# queue-consumer loop: an expired/403 source URL, or a libav decode error.
+_MEDIA_ERRORS = (av.FFmpegError, OSError)
 
 
 class Publisher:
@@ -114,7 +119,14 @@ class Publisher:
     def _spawn(self, coro: Coroutine[object, object, None]) -> None:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: asyncio.Task[None]) -> None:
+        # Surface a crashed background task instead of letting it die silently
+        # as an unretrieved-exception warning at GC time.
+        self._tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.error("background task failed", exc_info=exc)
 
     def _send(self, sig: Signal) -> None:
         for line in encode_signal(self.channel, sig):
@@ -288,13 +300,21 @@ class Publisher:
 
     async def _media_loop(self) -> None:
         while True:
-            self._skip.clear()
-            self._seek.clear()  # a seek only applies to the item it was issued for
-            item = self.playlist.take_next()
-            if item is None:
-                await self._play_fallback_or_idle()
-            else:
-                await self._play_item(item)
+            try:
+                await self._play_next()
+            except _MEDIA_ERRORS:
+                logger.exception("media item failed; skipping")
+                self._set_idle()
+                await asyncio.sleep(0.2)  # don't hot-loop if an item fails instantly
+
+    async def _play_next(self) -> None:
+        self._skip.clear()
+        self._seek.clear()  # a seek only applies to the item it was issued for
+        item = self.playlist.take_next()
+        if item is None:
+            await self._play_fallback_or_idle()
+        else:
+            await self._play_item(item)
 
     async def _play_fallback_or_idle(self) -> None:
         episode = self.fallback.peek()
@@ -373,7 +393,10 @@ class Publisher:
                 elif self._video is not None:
                     self._video.clear_source()
                     self._video.show_visualizer()
-                self._send({"type": "video", "state": "on"})
+                # Best-effort: a reconnect can leave the writer briefly closed,
+                # and a failed state ping must not abort playback.
+                with contextlib.suppress(RuntimeError):
+                    self._send({"type": "video", "state": "on"})
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
                 _stop_player(source)
@@ -455,9 +478,10 @@ def _open_source(
 
 
 def _open_player(source: object, *, fmt: str | None = None) -> MediaPlayer | None:
+    # av.FFmpegError: skip an expired/403 source URL instead of crashing the loop.
     try:
         return MediaPlayer(source, format=fmt)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, av.FFmpegError) as e:
         logger.warning("open failed: %s", e)
         return None
 
