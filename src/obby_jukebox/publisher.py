@@ -529,19 +529,22 @@ def _stop_player(source: MediaPlayer) -> None:
 def _open_source(
     resolved: Resolved, offset: float
 ) -> tuple[MediaPlayer, subprocess.Popen[bytes] | None] | None:
-    """Open the source positioned at `offset`. Jellyfin re-requests a URL the
-    server has already seeked to; other sources have ffmpeg seek the input and
-    stream a fresh container from zero, so the decode worker never seeks
-    mid-stream — which stalls some streams."""
+    """Open the source positioned at `offset`. A seek always feeds the
+    MediaPlayer through an ffmpeg remux that re-bases timestamps and forces
+    in-order A/V interleaving, so neither a server transcode (Jellyfin — which
+    delivers audio ahead of the subtitle-burned, re-encoded video) nor a
+    range-served file drifts out of sync. Jellyfin positions server-side via
+    seek_url, so ffmpeg only remuxes; everything else gets an ffmpeg input seek."""
     if offset <= 0:
         player = _open_player(resolved.media_url)
         return (player, None) if player is not None else None
     if resolved.seek_url is not None:
-        player = _open_player(resolved.seek_url(offset))
-        return (player, None) if player is not None else None
+        url, input_seek = resolved.seek_url(offset), 0.0
+    else:
+        url, input_seek = resolved.media_url, offset
     try:
         ffmpeg = subprocess.Popen(
-            _ffmpeg_seek_cmd(resolved.media_url, offset), stdout=subprocess.PIPE
+            _ffmpeg_seek_cmd(url, input_seek), stdout=subprocess.PIPE
         )
     except OSError as e:
         logger.warning("ffmpeg seek failed to start: %s", e)
@@ -563,11 +566,13 @@ def _open_player(source: object, *, fmt: str | None = None) -> MediaPlayer | Non
 
 
 def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
-    # -ss before -i is an input seek; -c copy avoids a re-encode; rw_timeout
-    # bounds a stalled network read so ffmpeg exits instead of hanging the pipe.
-    # genpts + avoid_negative_ts re-base timestamps to zero after the cut so the
-    # downstream encoder paces frames smoothly instead of stuttering on the jump.
-    return [
+    # -ss before -i is an input seek (skipped at offset 0, when the server already
+    # positioned the stream); -c copy avoids a re-encode; rw_timeout bounds a
+    # stalled network read. genpts + avoid_negative_ts re-base timestamps to zero,
+    # and max_interleave_delta 0 makes the muxer hold packets until it can write
+    # A/V in order — a server transcode can emit audio well ahead of its video,
+    # which otherwise drifts them apart.
+    cmd = [
         "ffmpeg",
         "-nostdin",
         "-loglevel",
@@ -576,18 +581,23 @@ def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
         "+genpts",
         "-rw_timeout",
         "20000000",
-        "-ss",
-        f"{offset:.3f}",
+    ]
+    if offset > 0:
+        cmd += ["-ss", f"{offset:.3f}"]
+    cmd += [
         "-i",
         url,
         "-c",
         "copy",
         "-avoid_negative_ts",
         "make_zero",
+        "-max_interleave_delta",
+        "0",
         "-f",
         "matroska",
         "pipe:1",
     ]
+    return cmd
 
 
 def _download(url: str, path: str) -> bool:

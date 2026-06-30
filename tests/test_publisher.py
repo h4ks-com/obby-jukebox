@@ -43,6 +43,22 @@ def test_ffmpeg_seek_is_an_input_seek_with_stream_copy():
     assert cmd[-1] == "pipe:1"
 
 
+def test_ffmpeg_seek_forces_av_interleave():
+    # max_interleave_delta 0 keeps a transcode's audio from racing ahead of video.
+    cmd = _ffmpeg_seek_cmd("u", 30)
+    assert cmd[cmd.index("-max_interleave_delta") + 1] == "0"
+
+
+def test_ffmpeg_seek_skips_input_seek_when_server_positioned():
+    # offset 0: the server (Jellyfin) already positioned the stream, so ffmpeg
+    # only remuxes — no -ss — but still re-interleaves A/V.
+    cmd = _ffmpeg_seek_cmd("http://jf/stream.mkv", 0)
+    assert "-ss" not in cmd
+    assert cmd[cmd.index("-i") + 1] == "http://jf/stream.mkv"
+    assert cmd[cmd.index("-max_interleave_delta") + 1] == "0"
+    assert cmd[-1] == "pipe:1"
+
+
 def test_open_player_skips_source_that_403s(monkeypatch):
     def raise_403(*_args, **_kwargs):
         raise av.error.HTTPForbiddenError(858797304, "403", "http://x/v.mp4")
