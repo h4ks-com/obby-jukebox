@@ -143,6 +143,16 @@ def test_stream_url_burns_subtitle_when_index_given():
     )
 
 
+def test_stream_url_seeking_transcodes_with_ticks_and_session():
+    c = _client({})
+    # Seeking a no-subtitle item still switches to a transcode (the static stream
+    # can't be server-seeked); ticks are 100ns and the session must be fresh.
+    url = c.stream_url("abc", start_seconds=90, play_session_id="sess1")
+    assert "stream.mkv" in url and "SubtitleStreamIndex" not in url
+    assert "&StartTimeTicks=900000000" in url
+    assert url.endswith("&PlaySessionId=sess1")
+
+
 async def test_season_episode_counts():
     c = _client(
         {

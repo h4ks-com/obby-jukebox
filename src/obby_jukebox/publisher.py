@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import subprocess
 import time
 from collections.abc import Coroutine
 
@@ -356,33 +357,30 @@ class Publisher:
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         offset = 0.0
         while True:
-            options = {"ss": str(offset)} if offset else None
-            try:
-                source = MediaPlayer(resolved.media_url, options=options)
-            except (OSError, ValueError) as e:
-                logger.warning("open failed for %s: %s", resolved.title, e)
+            opened = _open_source(resolved, offset)
+            if opened is None:
                 self._set_idle()
                 return
+            source, ffmpeg = opened
             at = f" @ {offset:.0f}s" if offset else ""
             logger.info("now playing: %s%s", resolved.title, at)
             try:
                 if self._audio is not None and source.audio is not None:
                     self._audio.set_source(source.audio)
-                if self._video is not None:
-                    if source.video is not None:
-                        self._video.set_source(source.video)
-                        self._video.hide_visualizer()
-                    else:
-                        # Audio-only item: drop any stale video source and let
-                        # the bars stand in for the missing picture.
-                        self._video.clear_source()
-                        self._video.show_visualizer()
+                if self._video is not None and source.video is not None:
+                    self._video.set_source(source.video)
+                    self._video.hide_visualizer()
+                elif self._video is not None:
+                    self._video.clear_source()
+                    self._video.show_visualizer()
                 self._send({"type": "video", "state": "on"})
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
                 _stop_player(source)
+                if ffmpeg is not None:
+                    _stop_ffmpeg(ffmpeg)
             if reason == "seek":
-                offset = self._seek_target  # re-open the same media at the new offset
+                offset = self._seek_target
                 continue
             self._set_idle()
             return
@@ -427,3 +425,66 @@ def _stop_player(source: MediaPlayer) -> None:
     for track in (source.audio, source.video):
         if track is not None:
             track.stop()
+
+
+def _open_source(
+    resolved: Resolved, offset: float
+) -> tuple[MediaPlayer, subprocess.Popen[bytes] | None] | None:
+    """Open the source positioned at `offset`. Jellyfin re-requests a URL the
+    server has already seeked to; other sources have ffmpeg seek the input and
+    stream a fresh container from zero, so the decode worker never seeks
+    mid-stream — which stalls some streams."""
+    if offset <= 0:
+        player = _open_player(resolved.media_url)
+        return (player, None) if player is not None else None
+    if resolved.seek_url is not None:
+        player = _open_player(resolved.seek_url(offset))
+        return (player, None) if player is not None else None
+    try:
+        ffmpeg = subprocess.Popen(
+            _ffmpeg_seek_cmd(resolved.media_url, offset), stdout=subprocess.PIPE
+        )
+    except OSError as e:
+        logger.warning("ffmpeg seek failed to start: %s", e)
+        return None
+    player = _open_player(ffmpeg.stdout, fmt="matroska")
+    if player is None:
+        _stop_ffmpeg(ffmpeg)
+        return None
+    return (player, ffmpeg)
+
+
+def _open_player(source: object, *, fmt: str | None = None) -> MediaPlayer | None:
+    try:
+        return MediaPlayer(source, format=fmt)
+    except (OSError, ValueError) as e:
+        logger.warning("open failed: %s", e)
+        return None
+
+
+def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
+    # -ss before -i is an input seek; -c copy avoids a re-encode; rw_timeout
+    # bounds a stalled network read so ffmpeg exits instead of hanging the pipe.
+    return [
+        "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-rw_timeout",
+        "20000000",
+        "-ss",
+        f"{offset:.3f}",
+        "-i",
+        url,
+        "-c",
+        "copy",
+        "-f",
+        "matroska",
+        "pipe:1",
+    ]
+
+
+def _stop_ffmpeg(proc: subprocess.Popen[bytes]) -> None:
+    proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=2)

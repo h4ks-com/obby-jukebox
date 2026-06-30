@@ -162,6 +162,16 @@ async def test_set_movie_no_match_raises():
         await fb.set_movie("nope")
 
 
+async def test_peek_exposes_a_server_side_seek_url():
+    fb = _fallback()
+    await fb.set_series("breaking", 1, 1)
+    resolved = fb.peek()
+    assert resolved is not None and resolved.seek_url is not None
+    seeked = resolved.seek_url(30)
+    assert "StartTimeTicks=300000000" in seeked
+    assert "PlaySessionId=" in seeked
+
+
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured
