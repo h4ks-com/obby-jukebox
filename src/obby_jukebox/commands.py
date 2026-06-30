@@ -273,10 +273,15 @@ class CommandHandler:
             else:
                 self._reply(irctext.color("queue empty", irctext.GREY))
             return
-        titles = ", ".join(i.title or i.url for i in upcoming[:_QUEUE_PREVIEW])
+        lines = [irctext.bold(f"queue ({len(upcoming)}):")]
+        lines += [
+            f"{irctext.bold(f'{i}.')} {item.title or item.url}"
+            for i, item in enumerate(upcoming[:_QUEUE_PREVIEW], 1)
+        ]
         extra = len(upcoming) - _QUEUE_PREVIEW
-        more = irctext.color(f" (+{extra} more)", irctext.GREY) if extra > 0 else ""
-        self._reply(f"{irctext.bold('queue')}: {titles}{more}")
+        if extra > 0:
+            lines.append(irctext.color(f"+{extra} more", irctext.GREY))
+        self._reply_lines(lines)
 
     def _help(self) -> None:
         b = irctext.bold
