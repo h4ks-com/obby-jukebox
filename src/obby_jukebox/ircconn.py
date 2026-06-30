@@ -188,11 +188,12 @@ class IrcClient:
         self._maybe_set_bot_mode()
 
     def _maybe_set_bot_mode(self) -> None:
-        if self._bot_mode_sent or not self._bot_mode or not self.registered.is_set():
+        if self._bot_mode_sent or not self.registered.is_set():
             return
-        # Clear privdeaf/regonly too, or the server drops bot-cmds queries from
-        # users who aren't logged in.
-        self.send_raw(f"MODE {self.nick} +{self._bot_mode}-DR")
+        # +B is "B" on essentially every server; don't gate on ISUPPORT BOT
+        # since not all advertise it. Clearing privdeaf/regonly stops the server
+        # dropping bot-cmds queries from users who aren't logged in.
+        self.send_raw(f"MODE {self.nick} +{self._bot_mode or 'B'}-DR")
         self._bot_mode_sent = True
 
     def _handle_cap(self, line: Line) -> None:
