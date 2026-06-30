@@ -69,6 +69,21 @@ def test_resolve_uses_ytdlp():
         out = resolve("https://youtu.be/x")
     assert out.media_url == "https://cdn/stream.mp4"
     assert out.title == "Cool Video"
+    assert out.duration is None
+
+
+def test_resolve_captures_duration_as_int():
+    info = {"url": "https://cdn/s.mp4", "title": "T", "duration": 215.7}
+    with patch("obby_jukebox.player.yt_dlp.YoutubeDL", side_effect=_fake_ydl(info)):
+        out = resolve("https://youtu.be/x")
+    assert out.duration == 215
+
+
+def test_add_carries_duration():
+    pl = Playlist()
+    item = pl.add("u", "t", 200)
+    assert item.duration == 200
+    assert pl.add("u2").duration is None
 
 
 def test_resolve_copies_readonly_cookies_to_writable_temp(tmp_path):

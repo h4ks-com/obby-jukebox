@@ -107,6 +107,23 @@ def _fmt_duration(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def _dur_suffix(duration: int | None) -> str:
+    if duration is None:
+        return ""
+    return " " + irctext.color(_fmt_duration(duration), irctext.TEAL)
+
+
+def _format_position(elapsed: float | None, total: int | None) -> str:
+    """`mm:ss / mm:ss` when both are known, else whichever single value we have."""
+    if total is not None and elapsed is not None:
+        return f"{_fmt_duration(int(elapsed))} / {_fmt_duration(total)}"
+    if total is not None:
+        return _fmt_duration(total)
+    if elapsed is not None:
+        return _fmt_duration(int(elapsed))
+    return ""
+
+
 def _format_result(index: int, result: YtResult) -> str:
     parts = [f"{irctext.bold(f'{index}.')} {irctext.bold(result.title)}"]
     if result.uploader:
@@ -170,6 +187,7 @@ class CommandHandler:
         spawn: Callable[
             [Coroutine[object, object, None]], object
         ] = asyncio.ensure_future,
+        position: Callable[[], float | None] = lambda: None,
     ) -> None:
         self.irc = irc
         self.playlist = playlist
@@ -184,6 +202,7 @@ class CommandHandler:
         self.cookies = cookies
         self.search_fn = search_fn
         self.spawn = spawn
+        self.position = position
 
     def on_message(
         self,
@@ -239,7 +258,8 @@ class CommandHandler:
             if not results:
                 self._reply("usage: .play <url|number> — or .yt <terms> first")
                 return
-            self._enqueue(results[0].url, results[0].title, msgid)
+            top = results[0]
+            self._enqueue(top.url, top.title, msgid, top.duration)
             return
         if arg.isdigit():
             index = int(arg)
@@ -249,13 +269,15 @@ class CommandHandler:
                 )
                 return
             chosen = results[index - 1]
-            self._enqueue(chosen.url, chosen.title, msgid)
+            self._enqueue(chosen.url, chosen.title, msgid, chosen.duration)
             return
         self._enqueue(arg, "", msgid)
 
-    def _enqueue(self, url: str, title: str, msgid: str | None) -> None:
+    def _enqueue(
+        self, url: str, title: str, msgid: str | None, duration: int | None = None
+    ) -> None:
         try:
-            item = self.playlist.add(url, title)
+            item = self.playlist.add(url, title, duration)
         except QueueFull as e:
             self._reply(str(e))
             return
@@ -290,13 +312,22 @@ class CommandHandler:
         lines.append(irctext.color("→ .play <number> to queue", irctext.GREY))
         self._reply_lines(lines)
 
+    def announce_now(self) -> None:
+        """Post the now-playing line unprompted; wired to playback changes."""
+        self._now()
+
     def _now(self) -> None:
         cur = self.playlist.now
-        title = cur.title or cur.url if cur is not None else self.fallback.now_label()
-        if title is None:
+        if cur is not None:
+            pos = _format_position(self.position(), cur.duration)
+            suffix = f" ({pos})" if pos else ""
+            self._reply(f"▶ now playing: {irctext.bold(cur.title or cur.url)}{suffix}")
+            return
+        label = self.fallback.now_label()
+        if label is None:
             self._reply(irctext.color("nothing playing", irctext.GREY))
             return
-        self._reply(f"▶ now playing: {irctext.bold(title)}")
+        self._reply(f"▶ now playing: {irctext.bold(label)}")
 
     def _queue(self) -> None:
         upcoming = self.playlist.upcoming()
@@ -309,6 +340,7 @@ class CommandHandler:
         lines = [irctext.bold(f"queue ({len(upcoming)}):")]
         lines += [
             f"{irctext.bold(f'{i}.')} {item.title or item.url}"
+            f"{_dur_suffix(item.duration)}"
             for i, item in enumerate(upcoming[:_QUEUE_PREVIEW], 1)
         ]
         extra = len(upcoming) - _QUEUE_PREVIEW
@@ -405,6 +437,19 @@ class CommandHandler:
         seconds = _parse_timecode(arg)
         if seconds is None:
             self._reply("usage: .seek <sec | mm:ss | hh:mm:ss>")
+            return
+        cur = self.playlist.now
+        if cur is None and not self.fallback.active:
+            self._reply(irctext.color("nothing playing to seek", irctext.GREY))
+            return
+        if cur is not None and cur.duration is not None and seconds >= cur.duration:
+            self._reply(
+                irctext.color(
+                    f"can't seek to {_fmt_duration(seconds)} — "
+                    f"{cur.title or 'this'} is only {_fmt_duration(cur.duration)}",
+                    irctext.RED,
+                )
+            )
             return
         self.seek(float(seconds))
         self._reply(f"seek → {irctext.bold(_fmt_duration(seconds))}")

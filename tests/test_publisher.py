@@ -1,4 +1,5 @@
 import asyncio
+import time
 import types
 from typing import cast
 from unittest.mock import Mock
@@ -10,6 +11,14 @@ from obby_jukebox import publisher
 from obby_jukebox.config import Settings
 from obby_jukebox.player import Playlist
 from obby_jukebox.publisher import Publisher, _ffmpeg_seek_cmd, _open_player
+
+
+def test_ffmpeg_seek_rebases_timestamps_to_zero():
+    cmd = _ffmpeg_seek_cmd("http://x/v.mp4", 5)
+    # genpts + avoid_negative_ts re-base PTS after the cut so the encoder doesn't
+    # stutter on the discontinuity.
+    assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+    assert cmd[cmd.index("-fflags") + 1] == "+genpts"
 
 
 def test_ffmpeg_seek_is_an_input_seek_with_stream_copy():
@@ -50,3 +59,22 @@ async def test_media_loop_survives_a_failed_item():
     with pytest.raises(asyncio.CancelledError):
         await pub._media_loop()
     assert calls == 2
+
+
+def test_position_is_none_when_idle():
+    assert _publisher().position() is None
+
+
+def test_position_counts_offset_plus_elapsed():
+    pub = _publisher()
+    pub._play_offset = 10.0
+    pub._play_started = time.monotonic() - 2.0
+    pos = pub.position()
+    assert pos is not None and 11.5 < pos < 12.5
+
+
+def test_set_idle_clears_position():
+    pub = _publisher()
+    pub._play_started = time.monotonic()
+    pub._set_idle()
+    assert pub.position() is None

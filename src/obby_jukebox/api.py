@@ -19,6 +19,7 @@ class ItemOut(BaseModel):
     id: str
     url: str
     title: str
+    duration: int | None = None
 
 
 class QueueOut(BaseModel):
@@ -31,7 +32,7 @@ class SeekRequest(BaseModel):
 
 
 def _out(item: Item) -> ItemOut:
-    return ItemOut(id=item.id, url=item.url, title=item.title)
+    return ItemOut(id=item.id, url=item.url, title=item.title, duration=item.duration)
 
 
 def create_app(

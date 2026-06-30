@@ -123,9 +123,11 @@ async def _run() -> None:
             admins,
             search_cache,
             cookies=settings.ytdlp_cookies,
+            position=publisher.position,
         )
         irc.on_message = handler.on_message
         irc.bottools = BotTools(irc, settings.voice_channel, ".", handler.on_message)
+        publisher.on_track_change = handler.announce_now
         live["publisher"] = publisher
 
         try:

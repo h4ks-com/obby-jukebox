@@ -74,10 +74,30 @@ async def test_video_track_renders_visualizer_when_audio_only():
         meter.push(0.6)
     track = JukeboxVideoTrack(320, 240, fps=30, meter=meter)
     track.show_visualizer()
+    track._vis_style = 0  # the bars style is the one that drives _bars
     frame = await track.recv()
     assert (frame.width, frame.height) == (320, 240)
     assert frame.format.name == "yuv420p"
     assert any(h > 0 for h in track._bars)  # loud audio drives the bars up
+
+
+async def test_every_visualizer_style_renders_a_valid_frame():
+    meter = AudioMeter()
+    for _ in range(10):
+        meter.push(0.6)
+    for style in range(tracks._VIS_STYLES):
+        track = JukeboxVideoTrack(320, 240, fps=30, meter=meter)
+        track.show_visualizer()
+        track._vis_style = style
+        frame = await track.recv()
+        assert (frame.width, frame.height) == (320, 240)
+        assert frame.format.name == "yuv420p"
+
+
+def test_show_visualizer_picks_a_style_in_range():
+    track = JukeboxVideoTrack(320, 240, fps=30, meter=AudioMeter())
+    track.show_visualizer()
+    assert 0 <= track._vis_style < tracks._VIS_STYLES
 
 
 async def test_visualizer_off_falls_back_to_idle_card():

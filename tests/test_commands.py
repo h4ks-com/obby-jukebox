@@ -1,4 +1,4 @@
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import NamedTuple
 
 import httpx
@@ -61,6 +61,7 @@ def _handler(
     channel: str = "$jukebox",
     admins: set[str] | None = None,
     yt_results: list[YtResult] | None = None,
+    position: Callable[[], float | None] = lambda: None,
 ) -> Harness:
     irc = FakeIrc(nick)
     playlist = Playlist()
@@ -88,6 +89,7 @@ def _handler(
         cache,
         search_fn=fake_search,
         spawn=coros.append,
+        position=position,
     )
     return Harness(
         handler, irc, playlist, woke, skipped, reloaded, fallback, coros, cache, seeked
@@ -293,6 +295,8 @@ async def test_now_reports_fallback_when_idle():
 
 def test_seek_accepts_seconds_and_timecodes():
     h = _handler()
+    h.playlist.add("http://x/1")  # current item, unknown duration → no upper bound
+    h.playlist.take_next()
     h.handler.on_message("alice", "$jukebox", ".seek 90")
     h.handler.on_message("alice", "$jukebox", ".seek 1:30")
     h.handler.on_message("alice", "$jukebox", ".seek 1:00:00")
@@ -304,6 +308,61 @@ def test_seek_rejects_garbage():
     h.handler.on_message("alice", "$jukebox", ".seek soon")
     assert h.seeked == []
     assert "usage" in h.irc.sent[-1][1].lower()
+
+
+def test_seek_with_nothing_playing_warns():
+    h = _handler()
+    h.handler.on_message("alice", "$jukebox", ".seek 30")
+    assert h.seeked == []
+    assert "nothing playing" in h.irc.sent[-1][1]
+
+
+def test_seek_beyond_duration_is_rejected_with_length():
+    h = _handler()
+    h.playlist.add("http://x/1", title="Song", duration=200)
+    h.playlist.take_next()
+    h.handler.on_message("alice", "$jukebox", ".seek 5:00")  # 300 >= 200
+    assert h.seeked == []
+    reply = h.irc.sent[-1][1]
+    assert "can't seek" in reply and "3:20" in reply  # surfaces the real length
+
+
+def test_seek_within_duration_passes_through():
+    h = _handler()
+    h.playlist.add("http://x/1", title="Song", duration=200)
+    h.playlist.take_next()
+    h.handler.on_message("alice", "$jukebox", ".seek 1:30")
+    assert h.seeked == [90.0]
+
+
+def test_now_shows_elapsed_over_total():
+    h = _handler(position=lambda: 23.0)
+    h.playlist.add("http://x/1", title="Song", duration=215)
+    h.playlist.take_next()
+    h.handler.on_message("alice", "$jukebox", ".now")
+    assert "0:23 / 3:35" in h.irc.sent[-1][1]
+
+
+def test_queue_shows_each_duration():
+    h = _handler()
+    h.playlist.add("http://x/1", title="A", duration=65)
+    h.handler.on_message("alice", "$jukebox", ".queue")
+    assert "1:05" in h.irc.sent[-1][1]
+
+
+def test_announce_now_posts_current_unprompted():
+    h = _handler(position=lambda: 5.0)
+    h.playlist.add("http://x/1", title="Nightcall", duration=100)
+    h.playlist.take_next()
+    h.handler.announce_now()
+    assert "now playing" in h.irc.sent[-1][1] and "Nightcall" in h.irc.sent[-1][1]
+
+
+def test_play_by_index_carries_duration():
+    h = _handler()
+    h.search_cache.put("$jukebox", "alice", [YtResult("A", "http://y/a", "Chan", 142)])
+    h.handler.on_message("alice", "$jukebox", ".play 1", account="alice")
+    assert h.playlist.upcoming()[0].duration == 142
 
 
 async def test_movie_sets_fallback_without_episode_label():

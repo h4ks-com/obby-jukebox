@@ -15,7 +15,7 @@ import contextlib
 import logging
 import subprocess
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 
 import av
 from aiortc import (
@@ -83,6 +83,10 @@ class Publisher:
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending_ice: list[Signal] = []
         self._role = ""
+        self._play_started = 0.0  # monotonic when the current source began, 0 if idle
+        self._play_offset = 0.0  # seek offset the current source started from
+        # Fired when playback switches to a new item, so the channel can announce it.
+        self.on_track_change: Callable[[], None] | None = None
 
     def wake(self) -> None:
         self._wake.set()
@@ -94,6 +98,12 @@ class Publisher:
         """Jump the currently-playing item to an absolute offset; no-op when idle."""
         self._seek_target = max(0.0, seconds)
         self._seek.set()
+
+    def position(self) -> float | None:
+        """Seconds elapsed into the current item, or None when nothing plays."""
+        if not self._play_started:
+            return None
+        return self._play_offset + (time.monotonic() - self._play_started)
 
     def reload_fallback(self) -> None:
         """Drop the fallback episode that's playing now so a `.show` change or
@@ -292,6 +302,7 @@ class Publisher:
         self._send({"type": "join", "channel": self.channel})
 
     def _set_idle(self) -> None:
+        self._play_started = 0.0
         if self._audio is not None:
             self._audio.clear_source()
         if self._video is not None:
@@ -344,8 +355,10 @@ class Publisher:
         if resolved is None:
             return
         item.title = item.title or resolved.title
+        item.duration = item.duration or resolved.duration
         await self._play_resolved(
-            Resolved(resolved.media_url, item.title), interruptible=False
+            Resolved(resolved.media_url, item.title, duration=item.duration),
+            interruptible=False,
         )
 
     async def _resolve(self, url: str) -> Resolved | None:
@@ -376,6 +389,7 @@ class Publisher:
 
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         offset = 0.0
+        announced = False
         while True:
             opened = _open_source(resolved, offset)
             if opened is None:
@@ -397,6 +411,16 @@ class Publisher:
                 # and a failed state ping must not abort playback.
                 with contextlib.suppress(RuntimeError):
                     self._send({"type": "video", "state": "on"})
+                self._play_offset = offset
+                self._play_started = time.monotonic()
+                # Announce a fresh user-track start once. Fallback episodes
+                # (interruptible) and seek re-opens stay quiet; best-effort
+                # because a reconnect can briefly close the writer, and a failed
+                # announce must not abort playback.
+                if not announced and not interruptible and self.on_track_change:
+                    announced = True
+                    with contextlib.suppress(RuntimeError):
+                        self.on_track_change()
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
                 _stop_player(source)
@@ -489,11 +513,15 @@ def _open_player(source: object, *, fmt: str | None = None) -> MediaPlayer | Non
 def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
     # -ss before -i is an input seek; -c copy avoids a re-encode; rw_timeout
     # bounds a stalled network read so ffmpeg exits instead of hanging the pipe.
+    # genpts + avoid_negative_ts re-base timestamps to zero after the cut so the
+    # downstream encoder paces frames smoothly instead of stuttering on the jump.
     return [
         "ffmpeg",
         "-nostdin",
         "-loglevel",
         "error",
+        "-fflags",
+        "+genpts",
         "-rw_timeout",
         "20000000",
         "-ss",
@@ -502,6 +530,8 @@ def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
         url,
         "-c",
         "copy",
+        "-avoid_negative_ts",
+        "make_zero",
         "-f",
         "matroska",
         "pipe:1",

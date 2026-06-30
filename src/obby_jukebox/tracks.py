@@ -13,6 +13,7 @@ import asyncio
 import fractions
 import math
 import os
+import random
 import time
 
 import av
@@ -38,6 +39,7 @@ _VIS_BARS = 36
 _VIS_BG = (12, 12, 20)
 _VIS_GRAVITY = 0.045  # how fast a bar falls back per frame once the level drops
 _METER_GAIN = 5.0  # music RMS lands around 0.1-0.3; scale it up to fill the bars
+_VIS_STYLES = 5  # bars, mirror, radial, wave, pulse — one picked at random per item
 
 
 class AudioMeter:
@@ -148,6 +150,7 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._visualize = False
         self._bars = [0.0] * _VIS_BARS
         self._vis_tick = 0
+        self._vis_style = 0
         self._bar_colors = [_bar_color(i) for i in range(_VIS_BARS)]
         self.last_frame_at = 0.0
 
@@ -159,11 +162,13 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._source = None
 
     def show_visualizer(self) -> None:
-        """Render animated bars (instead of the idle card) while an audio-only
-        item plays. Resets bar heights so they grow in from nothing."""
+        """Animate the audio (instead of the idle card) while an audio-only item
+        plays. A fresh random style is chosen per item for variety; bar state is
+        reset so it grows in from nothing."""
         if not self._visualize:
             self._bars = [0.0] * _VIS_BARS
             self._vis_tick = 0
+            self._vis_style = random.randrange(_VIS_STYLES)
         self._visualize = True
 
     def hide_visualizer(self) -> None:
@@ -198,14 +203,24 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._vis_tick += 1
         img = Image.new("RGB", (self._width, self._height), _VIS_BG)
         draw = ImageDraw.Draw(img)
-        gap = self._width / _VIS_BARS
-        bar_w = gap * 0.6
-        base_y = int(self._height * 0.9)
-        span = self._height * 0.74
+        if self._vis_style == 1:
+            self._draw_mirror(draw, level)
+        elif self._vis_style == 2:
+            self._draw_radial(draw, level)
+        elif self._vis_style == 3:
+            self._draw_wave(draw, level)
+        elif self._vis_style == 4:
+            self._draw_pulse(draw, level)
+        else:
+            self._draw_bars(draw, level)
+        return _frame_from_image(img)
+
+    def _spectrum(self, level: float) -> None:
+        """Drive the per-bar heights from the loudness level. A distinct wobble
+        per bar keeps neighbours out of step and a centred profile makes the mid
+        bars peak, so steady audio still reads as a lively spectrum; gravity eases
+        each bar back down once the level drops."""
         for i in range(_VIS_BARS):
-            # A per-bar wobble (distinct speed + phase) keeps neighbours out of
-            # step, and a centred profile makes the mid bars peak — so steady
-            # audio still reads as a lively spectrum rather than a flat block.
             wobble = 0.55 + 0.45 * math.sin(self._vis_tick * (0.12 + 0.015 * i) + i)
             profile = 0.35 + 0.65 * math.sin(math.pi * (i + 0.5) / _VIS_BARS)
             target = level * profile * wobble
@@ -213,12 +228,77 @@ class JukeboxVideoTrack(MediaStreamTrack):
                 self._bars[i] = target
             else:
                 self._bars[i] = max(target, self._bars[i] - _VIS_GRAVITY)
-            height = max(2, int(self._bars[i] * span))
+
+    def _draw_bars(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        self._spectrum(level)
+        gap = self._width / _VIS_BARS
+        bar_w = gap * 0.6
+        base_y = self._height * 0.9
+        span = self._height * 0.74
+        for i in range(_VIS_BARS):
+            height = max(2.0, self._bars[i] * span)
             x0 = gap * i + (gap - bar_w) / 2
             draw.rectangle(
                 (x0, base_y - height, x0 + bar_w, base_y), fill=self._bar_colors[i]
             )
-        return _frame_from_image(img)
+
+    def _draw_mirror(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        self._spectrum(level)
+        gap = self._width / _VIS_BARS
+        bar_w = gap * 0.6
+        cy = self._height / 2
+        half = self._height * 0.42
+        for i in range(_VIS_BARS):
+            height = max(1.0, self._bars[i] * half)
+            x0 = gap * i + (gap - bar_w) / 2
+            draw.rectangle(
+                (x0, cy - height, x0 + bar_w, cy + height), fill=self._bar_colors[i]
+            )
+
+    def _draw_radial(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        self._spectrum(level)
+        cx, cy = self._width / 2, self._height / 2
+        inner = min(self._width, self._height) * 0.16
+        reach = min(self._width, self._height) * 0.30
+        rot = self._vis_tick * 0.01
+        for i in range(_VIS_BARS):
+            ang = 2 * math.pi * i / _VIS_BARS + rot
+            ca, sa = math.cos(ang), math.sin(ang)
+            length = inner + self._bars[i] * reach
+            draw.line(
+                (cx + ca * inner, cy + sa * inner, cx + ca * length, cy + sa * length),
+                fill=self._bar_colors[i],
+                width=3,
+            )
+
+    def _draw_wave(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cy = self._height / 2
+        amp = level * self._height * 0.4
+        phase = self._vis_tick * 0.2
+        step = max(2, self._width // 160)
+        points = [
+            (
+                float(x),
+                cy
+                + amp
+                * (0.4 + 0.6 * math.sin(math.pi * x / self._width))
+                * math.sin(x / self._width * math.pi * 8 + phase),
+            )
+            for x in range(0, self._width + step, step)
+        ]
+        draw.line(points, fill=self._bar_colors[_VIS_BARS // 2], width=2)
+
+    def _draw_pulse(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        span = min(self._width, self._height)
+        for k in range(5):
+            phase = (self._vis_tick * 0.03 + k / 5) % 1.0
+            r = span * (0.08 + phase * 0.42 * (0.6 + level))
+            fade = 220 * (1.0 - phase)
+            ring = (int(fade / 3), int(fade), int(fade * 0.9))
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=ring, width=2)
+        blob = span * 0.06 * (1.0 + level)
+        draw.ellipse((cx - blob, cy - blob, cx + blob, cy + blob), fill=(60, 220, 200))
 
     def _letterbox(self, raw: av.VideoFrame) -> av.VideoFrame:
         """Scale the source into the fixed output size preserving its aspect

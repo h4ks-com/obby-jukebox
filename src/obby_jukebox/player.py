@@ -24,6 +24,7 @@ class QueueFull(Exception):
 class Item:
     url: str
     title: str = ""
+    duration: int | None = None  # seconds; None until known (search or resolve)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
 
@@ -31,6 +32,7 @@ class Item:
 class Resolved:
     media_url: str
     title: str
+    duration: int | None = None
     # Jellyfin sets this to seek server-side; None means a direct source that
     # ffmpeg seeks on the way in.
     seek_url: Callable[[float], str] | None = None
@@ -64,10 +66,10 @@ class Playlist:
         self._current: Item | None = None
         self._max = maxlen
 
-    def add(self, url: str, title: str = "") -> Item:
+    def add(self, url: str, title: str = "", duration: int | None = None) -> Item:
         if len(self._items) >= self._max:
             raise QueueFull(f"queue is full ({self._max})")
-        item = Item(url=url, title=title)
+        item = Item(url=url, title=title, duration=duration)
         self._items.append(item)
         return item
 
@@ -118,7 +120,12 @@ def resolve(url: str, cookies: str = "") -> Resolved:
             opts["cookiefile"] = cookiefile
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-    return Resolved(media_url=info["url"], title=info.get("title", url))
+    duration = info.get("duration")
+    return Resolved(
+        media_url=info["url"],
+        title=info.get("title", url),
+        duration=int(duration) if duration else None,
+    )
 
 
 def search_youtube(query: str, cookies: str = "", limit: int = 3) -> list[YtResult]:
