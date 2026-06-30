@@ -36,7 +36,7 @@ from obby_jukebox.signaling import (
     encode_signal,
     parse_rtc_tag,
 )
-from obby_jukebox.tracks import JukeboxAudioTrack, JukeboxVideoTrack
+from obby_jukebox.tracks import AudioMeter, JukeboxAudioTrack, JukeboxVideoTrack
 
 logger = logging.getLogger(__name__)
 
@@ -190,12 +190,14 @@ class Publisher:
         def _ice_state() -> None:
             logger.info("pc ice=%s", pc.iceConnectionState)
 
-        self._audio = JukeboxAudioTrack()
+        meter = AudioMeter()
+        self._audio = JukeboxAudioTrack(meter)
         self._video = JukeboxVideoTrack(
             self.s.video_width,
             self.s.video_height,
             self.s.video_fps,
             idle_image=self.s.idle_image,
+            meter=meter,
         )
         pc.addTrack(self._audio)
         pc.addTrack(self._video)
@@ -276,6 +278,7 @@ class Publisher:
             self._audio.clear_source()
         if self._video is not None:
             self._video.clear_source()
+            self._video.hide_visualizer()
 
     async def _media_loop(self) -> None:
         while True:
@@ -360,8 +363,15 @@ class Publisher:
             try:
                 if self._audio is not None and source.audio is not None:
                     self._audio.set_source(source.audio)
-                if self._video is not None and source.video is not None:
-                    self._video.set_source(source.video)
+                if self._video is not None:
+                    if source.video is not None:
+                        self._video.set_source(source.video)
+                        self._video.hide_visualizer()
+                    else:
+                        # Audio-only item: drop any stale video source and let
+                        # the bars stand in for the missing picture.
+                        self._video.clear_source()
+                        self._video.show_visualizer()
                 self._send({"type": "video", "state": "on"})
                 reason = await self._await_end(source, interruptible=interruptible)
             finally:
