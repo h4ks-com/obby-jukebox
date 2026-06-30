@@ -1,4 +1,6 @@
 import asyncio
+import os
+import subprocess
 import time
 import types
 from typing import cast
@@ -10,7 +12,17 @@ import pytest
 from obby_jukebox import publisher
 from obby_jukebox.config import Settings
 from obby_jukebox.player import Playlist
-from obby_jukebox.publisher import Publisher, _ffmpeg_seek_cmd, _open_player
+from obby_jukebox.publisher import (
+    Publisher,
+    _download,
+    _ffmpeg_seek_cmd,
+    _open_player,
+)
+
+
+class _FakeProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
 
 
 def test_ffmpeg_seek_rebases_timestamps_to_zero():
@@ -78,3 +90,100 @@ def test_set_idle_clears_position():
     pub._play_started = time.monotonic()
     pub._set_idle()
     assert pub.position() is None
+
+
+def test_download_copies_without_reencode(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(os.path, "getsize", lambda _p: 4096)
+    assert _download("http://x/v.mp4", "/tmp/out.mkv") is True
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("-c") + 1] == "copy"  # no re-encode → no CPU spike
+    assert cmd[cmd.index("-i") + 1] == "http://x/v.mp4"
+    assert cmd[-1] == "/tmp/out.mkv"
+
+
+def test_download_fails_on_timeout(monkeypatch):
+    def boom(cmd, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert _download("http://x/v", "/tmp/out.mkv") is False
+
+
+def test_download_fails_on_empty_output(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **_k: _FakeProc(0))
+    monkeypatch.setattr(os.path, "getsize", lambda _p: 0)
+    assert _download("http://x/v", "/tmp/out.mkv") is False
+
+
+async def test_buffer_returns_local_path_on_success(monkeypatch):
+    pub = _publisher()
+    monkeypatch.setattr(publisher, "_download", lambda _url, _path: True)
+    path = await pub._buffer("http://x/v")
+    assert path is not None and path.endswith(".mkv")
+    os.unlink(path)
+
+
+async def test_buffer_cleans_up_and_returns_none_on_failure(monkeypatch):
+    pub = _publisher()
+    unlinked: list[str] = []
+    real_unlink = os.unlink
+
+    def record(path: str) -> None:
+        unlinked.append(path)
+        real_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", record)
+    monkeypatch.setattr(publisher, "_download", lambda _url, _path: False)
+    assert await pub._buffer("http://x/v") is None
+    assert unlinked and unlinked[0].endswith(".mkv")  # the temp file was removed
+
+
+async def test_buffer_removes_temp_when_cancelled(monkeypatch):
+    pub = _publisher()
+    unlinked: list[str] = []
+    real_unlink = os.unlink
+
+    def record(path: str) -> None:
+        unlinked.append(path)
+        real_unlink(path)
+
+    async def cancel_mid_wait(_work, _max_wait):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(os, "unlink", record)
+    monkeypatch.setattr(publisher, "_download", lambda _url, _path: False)
+    monkeypatch.setattr(pub, "_with_skip", cancel_mid_wait)
+    with pytest.raises(asyncio.CancelledError):
+        await pub._buffer("http://x/v")
+    assert unlinked and unlinked[0].endswith(".mkv")  # cleaned up despite cancel
+
+
+async def test_with_skip_true_when_work_finishes():
+    pub = _publisher()
+
+    async def quick() -> int:
+        return 42
+
+    work = asyncio.ensure_future(quick())
+    assert await pub._with_skip(work, 5) is True
+    assert work.result() == 42
+
+
+async def test_with_skip_false_when_skip_fires():
+    pub = _publisher()
+
+    async def slow() -> int:
+        await asyncio.sleep(10)
+        return 1
+
+    work = asyncio.ensure_future(slow())
+    pub._skip.set()
+    assert await pub._with_skip(work, 5) is False
+    work.cancel()

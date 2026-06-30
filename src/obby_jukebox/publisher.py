@@ -13,9 +13,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Coroutine
+from typing import cast
 
 import av
 from aiortc import (
@@ -51,9 +54,17 @@ _RESOLVE_TIMEOUT = 30
 # so a stalled stream can't freeze the channel on one item forever.
 _STALL_TIMEOUT = 8.0
 
+# Ceiling on buffering a remote item to local disk for seeking. A whole video
+# can take a while to pull; that's an acceptable one-time cost per seeked item.
+_BUFFER_TIMEOUT = 120.0
+
 # Media failures that must skip the current item rather than kill the single
 # queue-consumer loop: an expired/403 source URL, or a libav decode error.
 _MEDIA_ERRORS = (av.FFmpegError, OSError)
+
+# A buffering download that stalled or couldn't be spawned just yields no local
+# copy; the item still streams (and seeks remotely) as before.
+_DOWNLOAD_ERRORS = (subprocess.TimeoutExpired, OSError)
 
 
 class Publisher:
@@ -361,24 +372,28 @@ class Publisher:
             interruptible=False,
         )
 
-    async def _resolve(self, url: str) -> Resolved | None:
-        """Resolve in a worker thread, but never let it block the loop: a .skip
-        or a timeout abandons it (the thread can't be cancelled, so it drains in
-        the background) and playback moves on."""
-        work = asyncio.ensure_future(
-            asyncio.to_thread(resolve, url, self.s.ytdlp_cookies)
-        )
+    async def _with_skip[T](self, work: asyncio.Future[T], max_wait: float) -> bool:
+        """Wait for a worker-thread future without blocking the loop: a .skip or a
+        timeout abandons it (the thread can't be cancelled, so it drains in the
+        background). True if it finished, False if it was abandoned."""
         skip = asyncio.ensure_future(self._skip.wait())
+        racers = cast("set[asyncio.Future[object]]", {work, skip})
         try:
             done, _ = await asyncio.wait(
-                {work, skip},
-                timeout=_RESOLVE_TIMEOUT,
-                return_when=asyncio.FIRST_COMPLETED,
+                racers, timeout=max_wait, return_when=asyncio.FIRST_COMPLETED
             )
         finally:
             skip.cancel()
         if work not in done:
             work.add_done_callback(_ignore_result)
+            return False
+        return True
+
+    async def _resolve(self, url: str) -> Resolved | None:
+        work = asyncio.ensure_future(
+            asyncio.to_thread(resolve, url, self.s.ytdlp_cookies)
+        )
+        if not await self._with_skip(work, _RESOLVE_TIMEOUT):
             logger.warning("resolve abandoned for %s (skipped or timed out)", url)
             return None
         try:
@@ -387,50 +402,87 @@ class Publisher:
             logger.warning("resolve failed for %s: %s", url, e)
             return None
 
+    async def _buffer(self, url: str) -> str | None:
+        """Pull a remote source to a local temp file so seeks are fast and stay
+        A/V-synced: a complete local container seeks cleanly, whereas re-fetching
+        a remote stream from the cut point stalls and drifts. -c copy means no
+        re-encode, so no CPU spike. Returns the local path, or None on failure."""
+        fd, path = tempfile.mkstemp(suffix=".mkv")
+        os.close(fd)
+        logger.info("buffering %s for smooth seeking", url)
+        keep = False  # hand the temp file off to the caller only on success
+        try:
+            work = asyncio.ensure_future(asyncio.to_thread(_download, url, path))
+            if await self._with_skip(work, _BUFFER_TIMEOUT) and work.result():
+                keep = True
+                return path
+            logger.warning("buffering failed/abandoned for %s", url)
+            return None
+        finally:
+            if not keep:
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+
     async def _play_resolved(self, resolved: Resolved, *, interruptible: bool) -> None:
         offset = 0.0
         announced = False
-        while True:
-            opened = _open_source(resolved, offset)
-            if opened is None:
-                self._set_idle()
-                return
-            source, ffmpeg = opened
-            at = f" @ {offset:.0f}s" if offset else ""
-            logger.info("now playing: %s%s", resolved.title, at)
-            try:
-                if self._audio is not None and source.audio is not None:
-                    self._audio.set_source(source.audio)
-                if self._video is not None and source.video is not None:
-                    self._video.set_source(source.video)
-                    self._video.hide_visualizer()
-                elif self._video is not None:
-                    self._video.clear_source()
-                    self._video.show_visualizer()
-                # Best-effort: a reconnect can leave the writer briefly closed,
-                # and a failed state ping must not abort playback.
-                with contextlib.suppress(RuntimeError):
-                    self._send({"type": "video", "state": "on"})
-                self._play_offset = offset
-                self._play_started = time.monotonic()
-                # Announce a fresh user-track start once. Fallback episodes
-                # (interruptible) and seek re-opens stay quiet; best-effort
-                # because a reconnect can briefly close the writer, and a failed
-                # announce must not abort playback.
-                if not announced and not interruptible and self.on_track_change:
-                    announced = True
+        buffered = False
+        buffer_path: str | None = None
+        try:
+            while True:
+                opened = _open_source(resolved, offset)
+                if opened is None:
+                    self._set_idle()
+                    return
+                source, ffmpeg = opened
+                at = f" @ {offset:.0f}s" if offset else ""
+                logger.info("now playing: %s%s", resolved.title, at)
+                try:
+                    if self._audio is not None and source.audio is not None:
+                        self._audio.set_source(source.audio)
+                    if self._video is not None and source.video is not None:
+                        self._video.set_source(source.video)
+                        self._video.hide_visualizer()
+                    elif self._video is not None:
+                        self._video.clear_source()
+                        self._video.show_visualizer()
+                    # Best-effort: a reconnect can leave the writer briefly closed,
+                    # and a failed state ping must not abort playback.
                     with contextlib.suppress(RuntimeError):
-                        self.on_track_change()
-                reason = await self._await_end(source, interruptible=interruptible)
-            finally:
-                _stop_player(source)
-                if ffmpeg is not None:
-                    _stop_ffmpeg(ffmpeg)
-            if reason == "seek":
+                        self._send({"type": "video", "state": "on"})
+                    self._play_offset = offset
+                    self._play_started = time.monotonic()
+                    # Announce a fresh user-track start once. Fallback episodes
+                    # (interruptible) and seek re-opens stay quiet; best-effort
+                    # because a reconnect can briefly close the writer.
+                    if not announced and not interruptible and self.on_track_change:
+                        announced = True
+                        with contextlib.suppress(RuntimeError):
+                            self.on_track_change()
+                    reason = await self._await_end(source, interruptible=interruptible)
+                finally:
+                    _stop_player(source)
+                    if ffmpeg is not None:
+                        _stop_ffmpeg(ffmpeg)
+                if reason != "seek":
+                    self._set_idle()
+                    return
                 offset = self._seek_target
-                continue
-            self._set_idle()
-            return
+                # On the first seek of a remote user item, pull it to local disk
+                # so this and every later seek are fast and stay A/V-synced (the
+                # tile freezes for that one-time download); Jellyfin already seeks
+                # server-side via seek_url.
+                if resolved.seek_url is None and not buffered:
+                    buffered = True
+                    buffer_path = await self._buffer(resolved.media_url)
+                    if buffer_path is not None:
+                        resolved = Resolved(
+                            buffer_path, resolved.title, duration=resolved.duration
+                        )
+        finally:
+            if buffer_path is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(buffer_path)
 
     async def _await_end(self, source: MediaPlayer, *, interruptible: bool) -> str:
         track = source.video or source.audio
@@ -459,7 +511,7 @@ class Publisher:
         return latest > 0 and time.monotonic() - latest > _STALL_TIMEOUT
 
 
-def _ignore_result(task: asyncio.Task[Resolved]) -> None:
+def _ignore_result[T](task: asyncio.Future[T]) -> None:
     """Retrieve an abandoned task's outcome so a late failure isn't logged as an
     unretrieved exception."""
     if not task.cancelled():
@@ -536,6 +588,30 @@ def _ffmpeg_seek_cmd(url: str, offset: float) -> list[str]:
         "matroska",
         "pipe:1",
     ]
+
+
+def _download(url: str, path: str) -> bool:
+    """Copy a remote source into a local container with no re-encode so it can be
+    seeked locally; rw_timeout bounds a stalled fetch."""
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-rw_timeout",
+        "30000000",
+        "-i",
+        url,
+        "-c",
+        "copy",
+        "-y",
+        path,
+    ]
+    try:
+        proc = subprocess.run(cmd, timeout=_BUFFER_TIMEOUT, capture_output=True)
+    except _DOWNLOAD_ERRORS:
+        return False
+    return proc.returncode == 0 and os.path.getsize(path) > 0
 
 
 def _stop_ffmpeg(proc: subprocess.Popen[bytes]) -> None:
