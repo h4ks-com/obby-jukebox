@@ -128,9 +128,16 @@ async def test_burn_subtitles_off_ignores_streams():
     assert eps[0].subtitle_index is None
 
 
-def test_stream_url_direct_play_without_subtitle():
+def test_stream_url_transcodes_to_bounded_h264():
+    # No direct play: cap at the bot's output height so Jellyfin downscales a 4K
+    # remux instead of the bot software-decoding it.
     c = _client({})
-    assert c.stream_url("abc") == "http://jf/Videos/abc/stream?static=true&api_key=key"
+    url = c.stream_url("abc")
+    assert "static=true" not in url
+    assert url == (
+        "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
+        "&VideoCodec=h264&AudioCodec=aac&VideoBitrate=8000000&MaxHeight=720"
+    )
 
 
 def test_stream_url_burns_subtitle_when_index_given():
@@ -139,7 +146,7 @@ def test_stream_url_burns_subtitle_when_index_given():
     assert url == (
         "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
         "&SubtitleStreamIndex=2&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
-        "&VideoBitrate=8000000"
+        "&VideoBitrate=8000000&MaxHeight=720"
     )
 
 

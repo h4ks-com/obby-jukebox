@@ -85,12 +85,9 @@ async def test_no_match_raises():
 
 def test_stream_url_built_from_episode_id():
     fb = _fallback()
-    # peek/stream URL formatting is exercised once a series is set; here just
-    # confirm the client builds the direct-play URL shape.
-    assert (
-        fb._jelly.stream_url("abc")
-        == "http://jf/Videos/abc/stream?static=true&api_key=key"
-    )
+    # The client builds a height-capped h264 transcode (never a raw direct-play).
+    url = fb._jelly.stream_url("abc")
+    assert "stream.mkv" in url and "MaxHeight" in url and "static=true" not in url
 
 
 async def test_walks_every_episode_across_seasons_then_wraps():

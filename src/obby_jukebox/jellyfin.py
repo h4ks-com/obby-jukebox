@@ -82,11 +82,13 @@ class JellyfinClient:
         base_url: str,
         api_key: str,
         burn_subtitles: bool = True,
+        max_height: int = 720,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._key = api_key
         self._burn_subtitles = burn_subtitles
+        self._max_height = max_height
         self._client = client or httpx.AsyncClient(timeout=15)
 
     @property
@@ -187,21 +189,21 @@ class JellyfinClient:
         start_seconds: float = 0.0,
         play_session_id: str = "",
     ) -> str:
-        if subtitle_index is None and start_seconds <= 0:
-            # static=true → direct play of the original file; ffmpeg decodes it.
-            return (
-                f"{self._base}/Videos/{item_id}/stream?static=true&api_key={self._key}"
-            )
-        # A transcode lets the server burn subtitles and start at StartTimeTicks
-        # (100ns units); a fresh PlaySessionId per seek stops it reusing the
-        # running transcode at its current position. VideoBitrate is required for
-        # VAAPI encoders to open.
+        # Always transcode to a height-capped h264: the bot only outputs <=720p,
+        # so let Jellyfin's GPU (VAAPI) downscale rather than direct-play a 4K/HEVC
+        # remux the bot would have to software-decode in real time (it can't, and
+        # stutters). The server also seeks here (StartTimeTicks, 100ns units; a
+        # fresh PlaySessionId per seek stops it reusing the running transcode's
+        # position) and burns subtitles. VideoBitrate is required for VAAPI to open.
         url = (
             f"{self._base}/Videos/{item_id}/stream.mkv?api_key={self._key}&Static=false"
         )
         if subtitle_index is not None:
             url += f"&SubtitleStreamIndex={subtitle_index}&SubtitleMethod=Encode"
-        url += f"&VideoCodec=h264&AudioCodec=aac&VideoBitrate={_BURN_VIDEO_BITRATE}"
+        url += (
+            f"&VideoCodec=h264&AudioCodec=aac"
+            f"&VideoBitrate={_BURN_VIDEO_BITRATE}&MaxHeight={self._max_height}"
+        )
         if start_seconds > 0:
             url += f"&StartTimeTicks={int(start_seconds * 10_000_000)}"
         if play_session_id:

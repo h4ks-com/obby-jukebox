@@ -57,6 +57,7 @@ async def _run() -> None:
         settings.jellyfin_url,
         settings.jellyfin_api_key,
         burn_subtitles=settings.jellyfin_burn_subtitles,
+        max_height=settings.video_height,
     )
     fallback = FallbackShow(jellyfin)
     search_cache = SearchCache()
