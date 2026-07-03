@@ -162,6 +162,12 @@ class Publisher:
             await asyncio.wait_for(self._self_join.wait(), timeout=8)
         except TimeoutError:
             logger.warning("no self-echo JOIN within 8s; joining signal anyway")
+        # A dropped link (the ircd restarting) kills our socket before stop() can
+        # tell the SFU we left, so it still holds our old, now-dead peer and would
+        # treat a plain join as already-joined — no re-handshake, no stream. Leave
+        # first to clear it so the join starts a fresh WebRTC session.
+        self._send({"type": "leave", "channel": self.channel})
+        await asyncio.sleep(0.5)
         self._send({"type": "join", "channel": self.channel})
 
     def _on_join(self, nick: str, chan: str) -> None:

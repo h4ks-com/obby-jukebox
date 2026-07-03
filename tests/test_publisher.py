@@ -89,6 +89,18 @@ async def test_media_loop_survives_a_failed_item():
     assert calls == 2
 
 
+async def test_start_resets_stale_sfu_peer_with_leave_before_join(monkeypatch):
+    pub = _publisher()
+    pub.irc.registered = asyncio.Event()
+    pub.irc.registered.set()
+    pub._self_join.set()  # skip the self-echo wait
+    sent: list[str] = []
+    monkeypatch.setattr(pub, "_send", lambda sig: sent.append(sig["type"]))
+    await pub.start()
+    # leave first so the SFU drops any dead peer, then join for a fresh handshake.
+    assert sent == ["leave", "join"]
+
+
 def test_position_is_none_when_idle():
     assert _publisher().position() is None
 
