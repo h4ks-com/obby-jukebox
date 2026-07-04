@@ -136,7 +136,7 @@ def test_stream_url_transcodes_to_bounded_h264():
     assert "static=true" not in url
     assert url == (
         "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
-        "&VideoCodec=h264&AudioCodec=aac&VideoBitrate=8000000&MaxHeight=720"
+        "&VideoCodec=h264&AudioCodec=aac&VideoBitrate=8000000&MaxWidth=1280&MaxHeight=720"
     )
 
 
@@ -146,7 +146,7 @@ def test_stream_url_burns_subtitle_when_index_given():
     assert url == (
         "http://jf/Videos/abc/stream.mkv?api_key=key&Static=false"
         "&SubtitleStreamIndex=2&SubtitleMethod=Encode&VideoCodec=h264&AudioCodec=aac"
-        "&VideoBitrate=8000000&MaxHeight=720"
+        "&VideoBitrate=8000000&MaxWidth=1280&MaxHeight=720"
     )
 
 
