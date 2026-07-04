@@ -169,6 +169,15 @@ async def test_peek_exposes_a_server_side_seek_url():
     assert "PlaySessionId=" in seeked
 
 
+async def test_peek_uses_a_fresh_session_id_each_play():
+    fb = _fallback()
+    await fb.set_series("breaking", 1, 1)
+    first, second = fb.peek(), fb.peek()
+    assert first is not None and second is not None
+    assert "PlaySessionId=" in first.media_url
+    assert first.media_url != second.media_url  # a fresh transcode each play
+
+
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured

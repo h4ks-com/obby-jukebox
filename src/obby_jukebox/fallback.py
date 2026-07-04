@@ -89,7 +89,11 @@ class FallbackShow:
         if not self._episodes:
             return None
         ep = self._episodes[self._cursor]
-        url = self._jelly.stream_url(ep.id, ep.subtitle_index)
+        # A fresh session id per play forces its own transcode; without one
+        # Jellyfin can hand back a running transcode at the wrong resolution.
+        url = self._jelly.stream_url(
+            ep.id, ep.subtitle_index, play_session_id=uuid.uuid4().hex
+        )
         return Resolved(url, self._label(ep), seek_url=self._seek_url_for(ep))
 
     def _seek_url_for(self, ep: Episode) -> Callable[[float], str]:
