@@ -91,6 +91,9 @@ class Publisher:
         self._audio: JukeboxAudioTrack | None = None
         self._video: JukeboxVideoTrack | None = None
         self._media_started = False
+        self._shutdown = (
+            False  # set once we tear down, so a self-closed PC isn't "recovered"
+        )
         self._tasks: set[asyncio.Task[None]] = set()
         self._pending_ice: list[Signal] = []
         self._role = ""
@@ -127,6 +130,7 @@ class Publisher:
         """Leave the channel, cancel the media loop, and close the PC so the SFU
         drops our peer cleanly instead of lingering as a ghost streamer — and so a
         reconnect doesn't leave the old decode pipeline running."""
+        self._shutdown = True
         with contextlib.suppress(RuntimeError):
             self._send({"type": "leave", "channel": self.channel})
         for task in list(self._tasks):
@@ -230,6 +234,7 @@ class Publisher:
         @pc.on("connectionstatechange")
         def _conn_state() -> None:
             logger.info("pc connection=%s", pc.connectionState)
+            self._recover_if_dropped(pc)
 
         @pc.on("iceconnectionstatechange")
         def _ice_state() -> None:
@@ -303,6 +308,19 @@ class Publisher:
             logger.info("promoted to streamer; re-publishing")
             self._role = "streamer"
             await self._republish()
+
+    def _recover_if_dropped(self, pc: RTCPeerConnection) -> None:
+        """A peer the SFU drops (e.g. it timed us out during a slow source open)
+        leaves us streamer-in-name with a dead connection and nothing pulling the
+        tracks. Re-publish to rebuild it — unless we closed it ourselves, in which
+        case stop()/`_republish` set `_shutdown` or null out `self._pc` first."""
+        if (
+            pc.connectionState in ("failed", "closed")
+            and pc is self._pc
+            and not self._shutdown
+        ):
+            logger.warning("webrtc peer dropped; re-publishing")
+            self._spawn(self._republish())
 
     async def _republish(self) -> None:
         """Re-join so the SFU ingests our tracks as a streamer. Tracks we sent
@@ -436,7 +454,11 @@ class Publisher:
         buffer_path: str | None = None
         try:
             while True:
-                opened = _open_source(resolved, offset)
+                # Open off the event loop: a MediaPlayer open blocks until the
+                # source yields a container header, which for a deep Jellyfin
+                # transcode-seek is several seconds. Blocking the loop that long
+                # starves aiortc's ICE keepalives and the SFU drops our peer.
+                opened = await asyncio.to_thread(_open_source, resolved, offset)
                 if opened is None:
                     self._set_idle()
                     return

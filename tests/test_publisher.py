@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import av
 import pytest
+from aiortc import RTCPeerConnection
 
 from obby_jukebox import publisher
 from obby_jukebox.config import Settings
@@ -23,6 +24,11 @@ from obby_jukebox.publisher import (
 class _FakeProc:
     def __init__(self, returncode: int = 0) -> None:
         self.returncode = returncode
+
+
+class _FakePC:
+    def __init__(self, state: str) -> None:
+        self.connectionState = state
 
 
 def test_ffmpeg_seek_rebases_timestamps_to_zero():
@@ -99,6 +105,61 @@ async def test_start_resets_stale_sfu_peer_with_leave_before_join(monkeypatch):
     await pub.start()
     # leave first so the SFU drops any dead peer, then join for a fresh handshake.
     assert sent == ["leave", "join"]
+
+
+def _pc(state: str) -> RTCPeerConnection:
+    return cast(RTCPeerConnection, _FakePC(state))
+
+
+def _capture_spawns(pub: Publisher) -> list[object]:
+    spawned: list[object] = []
+
+    def spawn(coro: object) -> None:
+        coro.close()  # type: ignore[attr-defined]  # don't actually run _republish
+        spawned.append(coro)
+
+    pub._spawn = spawn  # type: ignore[method-assign]
+    return spawned
+
+
+def test_dropped_peer_republishes():
+    for state in ("closed", "failed"):
+        pub = _publisher()
+        pc = _pc(state)
+        pub._pc = pc
+        spawned = _capture_spawns(pub)
+        pub._recover_if_dropped(pc)
+        assert len(spawned) == 1, state
+
+
+def test_self_closed_peer_does_not_republish():
+    # stop() sets _shutdown before closing, so our own teardown isn't "recovered".
+    pub = _publisher()
+    pc = _pc("closed")
+    pub._pc = pc
+    pub._shutdown = True
+    spawned = _capture_spawns(pub)
+    pub._recover_if_dropped(pc)
+    assert spawned == []
+
+
+def test_stale_peer_close_does_not_republish():
+    # _republish nulls self._pc before closing the old PC; that close must not
+    # spawn a second republish.
+    pub = _publisher()
+    spawned = _capture_spawns(pub)
+    pub._pc = None
+    pub._recover_if_dropped(_pc("closed"))
+    assert spawned == []
+
+
+def test_connected_peer_does_not_republish():
+    pub = _publisher()
+    pc = _pc("connected")
+    pub._pc = pc
+    spawned = _capture_spawns(pub)
+    pub._recover_if_dropped(pc)
+    assert spawned == []
 
 
 def test_position_is_none_when_idle():
