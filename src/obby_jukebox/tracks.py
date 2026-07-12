@@ -39,7 +39,10 @@ _VIS_BARS = 36
 _VIS_BG = (12, 12, 20)
 _VIS_GRAVITY = 0.045  # how fast a bar falls back per frame once the level drops
 _METER_GAIN = 5.0  # music RMS lands around 0.1-0.3; scale it up to fill the bars
-_VIS_STYLES = 5  # bars, mirror, radial, wave, pulse — one picked at random per item
+# Visualizer styles, indexed by _vis_style (order matches _render_visualizer's
+# dispatch). One is picked at random per audio-only item; .vis changes it live.
+VIS_NAMES = ("bars", "mirror", "radial", "wave", "pulse")
+_VIS_STYLES = len(VIS_NAMES)
 
 
 class AudioMeter:
@@ -174,6 +177,18 @@ class JukeboxVideoTrack(MediaStreamTrack):
     def hide_visualizer(self) -> None:
         self._visualize = False
 
+    def change_visualizer(self, style: int | None = None) -> str | None:
+        """Switch the live audio animation: None cycles to the next style, an
+        index selects one. Returns the new style's name, or None when nothing is
+        being visualized (a video item is playing, or the channel is idle)."""
+        if not self._visualize:
+            return None
+        if style is None:
+            self._vis_style = (self._vis_style + 1) % _VIS_STYLES
+        else:
+            self._vis_style = style % _VIS_STYLES
+        return VIS_NAMES[self._vis_style]
+
     async def recv(self) -> av.VideoFrame:
         source = self._source
         frame: av.VideoFrame | None = None
@@ -203,16 +218,9 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._vis_tick += 1
         img = Image.new("RGB", (self._width, self._height), _VIS_BG)
         draw = ImageDraw.Draw(img)
-        if self._vis_style == 1:
-            self._draw_mirror(draw, level)
-        elif self._vis_style == 2:
-            self._draw_radial(draw, level)
-        elif self._vis_style == 3:
-            self._draw_wave(draw, level)
-        elif self._vis_style == 4:
-            self._draw_pulse(draw, level)
-        else:
-            self._draw_bars(draw, level)
+        # Dispatch by name so VIS_NAMES stays the one place the style order lives:
+        # a new style is an entry there plus a matching _draw_<name> method.
+        getattr(self, f"_draw_{VIS_NAMES[self._vis_style]}")(draw, level)
         return _frame_from_image(img)
 
     def _spectrum(self, level: float) -> None:

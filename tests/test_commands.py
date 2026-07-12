@@ -54,6 +54,7 @@ class Harness(NamedTuple):
     coros: list[Coroutine[object, object, None]]
     search_cache: SearchCache
     seeked: list[float]
+    vis_calls: list[int | None]
 
 
 def _handler(
@@ -63,6 +64,7 @@ def _handler(
     yt_results: list[YtResult] | None = None,
     position: Callable[[], float | None] = lambda: None,
     radio_url: str = "",
+    vis_result: str | None = None,
 ) -> Harness:
     irc = FakeIrc(nick)
     playlist = Playlist()
@@ -72,10 +74,15 @@ def _handler(
     skipped: list[bool] = []
     reloaded: list[bool] = []
     seeked: list[float] = []
+    vis_calls: list[int | None] = []
     coros: list[Coroutine[object, object, None]] = []
 
     def fake_search(query: str, cookies: str, limit: int) -> list[YtResult]:
         return yt_results or []
+
+    def change_vis(style: int | None) -> str | None:
+        vis_calls.append(style)
+        return vis_result
 
     handler = CommandHandler(
         irc,
@@ -84,6 +91,7 @@ def _handler(
         lambda: woke.append(True),
         lambda: skipped.append(True),
         seeked.append,
+        change_vis,
         lambda: reloaded.append(True),
         fallback,
         admins or set(),
@@ -94,7 +102,17 @@ def _handler(
         position=position,
     )
     return Harness(
-        handler, irc, playlist, woke, skipped, reloaded, fallback, coros, cache, seeked
+        handler,
+        irc,
+        playlist,
+        woke,
+        skipped,
+        reloaded,
+        fallback,
+        coros,
+        cache,
+        seeked,
+        vis_calls,
     )
 
 
@@ -264,6 +282,7 @@ def test_show_unavailable_without_jellyfin():
         lambda: None,
         lambda: None,
         lambda s: None,
+        lambda _s: None,
         lambda: None,
         fallback,
         {"mattf"},
@@ -430,3 +449,31 @@ def test_seek_rejected_on_live_radio():
     h.handler.on_message("alice", "$jukebox", ".seek 60")
     assert h.seeked == []  # a live stream has nothing to seek to
     assert "can't seek" in h.irc.sent[-1][1]
+
+
+def test_vis_cycles_to_next_animation():
+    h = _handler(vis_result="mirror")
+    h.handler.on_message("alice", "$jukebox", ".vis")
+    assert h.vis_calls == [None]  # None → cycle
+    assert "mirror" in h.irc.sent[-1][1]
+
+
+def test_vis_by_name_selects_that_animation():
+    h = _handler(vis_result="wave")
+    h.handler.on_message("alice", "$jukebox", ".vis wave")
+    assert h.vis_calls == [3]  # index of "wave"
+    assert "wave" in h.irc.sent[-1][1]
+
+
+def test_vis_unknown_name_lists_animations():
+    h = _handler()
+    h.handler.on_message("alice", "$jukebox", ".vis sparkle")
+    assert h.vis_calls == []  # rejected before touching the track
+    assert "bars" in h.irc.sent[-1][1] and "pulse" in h.irc.sent[-1][1]
+
+
+def test_vis_reports_when_nothing_is_animating():
+    h = _handler(vis_result=None)  # no visualizer active → callback returns None
+    h.handler.on_message("alice", "$jukebox", ".vis")
+    assert h.vis_calls == [None]
+    assert "no animation" in h.irc.sent[-1][1]

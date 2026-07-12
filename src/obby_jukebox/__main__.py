@@ -120,6 +120,7 @@ async def _run() -> None:
             publisher.wake,
             publisher.skip,
             publisher.seek,
+            publisher.change_visualizer,
             publisher.reload_fallback,
             fallback,
             admins,

@@ -100,6 +100,20 @@ def test_show_visualizer_picks_a_style_in_range():
     assert 0 <= track._vis_style < tracks._VIS_STYLES
 
 
+def test_change_visualizer_cycles_and_selects():
+    track = JukeboxVideoTrack(320, 240, fps=30, meter=AudioMeter())
+    track.show_visualizer()
+    track._vis_style = 0
+    assert track.change_visualizer() == "mirror"  # None cycles 0 → 1
+    assert track.change_visualizer(3) == "wave"  # index selects
+    assert track.change_visualizer(len(tracks.VIS_NAMES)) == "bars"  # wraps
+
+
+def test_change_visualizer_noop_when_hidden():
+    track = JukeboxVideoTrack(320, 240, fps=30, meter=AudioMeter())
+    assert track.change_visualizer() is None  # nothing to change while hidden
+
+
 async def test_visualizer_off_falls_back_to_idle_card():
     track = JukeboxVideoTrack(320, 240, fps=30, meter=AudioMeter())
     track.show_visualizer()

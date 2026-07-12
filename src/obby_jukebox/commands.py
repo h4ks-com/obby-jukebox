@@ -24,6 +24,7 @@ from obby_jukebox.player import (
     YtResult,
     search_youtube,
 )
+from obby_jukebox.tracks import VIS_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ COMMANDS: list[Command] = [
     ),
     Command("seek", "Jump within the current video.", "90 | 1:30 | 1:30:00"),
     Command("skip", "Skip the current video."),
+    Command("vis", "Change the audio animation (cycles, or name one).", "[name]"),
     Command("now", "Show what's playing."),
     Command("queue", "List the upcoming videos."),
     Command("clear", "Empty the queue."),
@@ -179,6 +181,7 @@ class CommandHandler:
         wake: Callable[[], None],
         skip: Callable[[], None],
         seek: Callable[[float], None],
+        change_visualizer: Callable[[int | None], str | None],
         reload_fallback: Callable[[], None],
         fallback: FallbackShow,
         admins: set[str],
@@ -197,6 +200,7 @@ class CommandHandler:
         self.wake = wake
         self.skip = skip
         self.seek = seek
+        self.change_visualizer = change_visualizer
         self.reload_fallback = reload_fallback
         self.fallback = fallback
         self.admins = admins
@@ -235,6 +239,8 @@ class CommandHandler:
             self._reply("skipped")
         elif cmd == "seek":
             self._do_seek(arg)
+        elif cmd == "vis":
+            self._vis(arg)
         elif cmd == "clear":
             self.playlist.clear()
             self._reply("queue cleared")
@@ -481,6 +487,24 @@ class CommandHandler:
             return
         self.seek(float(seconds))
         self._reply(f"seek → {irctext.bold(_fmt_duration(seconds))}")
+
+    def _vis(self, arg: str) -> None:
+        style: int | None = None
+        if arg:
+            name = arg.casefold()
+            if name not in VIS_NAMES:
+                self._reply(
+                    irctext.color(f"animations: {' '.join(VIS_NAMES)}", irctext.GREY)
+                )
+                return
+            style = VIS_NAMES.index(name)
+        current = self.change_visualizer(style)
+        if current is None:
+            self._reply(
+                irctext.color("no animation now (only audio-only items)", irctext.GREY)
+            )
+            return
+        self._reply(f"animation: {irctext.bold(current)}")
 
     async def _search(self, query: str) -> None:
         try:

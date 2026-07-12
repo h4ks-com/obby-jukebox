@@ -119,6 +119,12 @@ class Publisher:
             return None
         return self._play_offset + (time.monotonic() - self._play_started)
 
+    def change_visualizer(self, style: int | None = None) -> str | None:
+        """Cycle (None) or set the live audio animation; None when none is on."""
+        if self._video is None:
+            return None
+        return self._video.change_visualizer(style)
+
     def reload_fallback(self) -> None:
         """Drop the fallback episode that's playing now so a `.show` change or
         `.show off` takes effect immediately instead of at the episode's end.
