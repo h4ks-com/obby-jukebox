@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import av
 import pytest
 from aiortc import RTCPeerConnection
+from aiortc.contrib.media import MediaPlayer
 
 from obby_jukebox import publisher
 from obby_jukebox.config import Settings
@@ -29,6 +30,15 @@ class _FakeProc:
 class _FakePC:
     def __init__(self, state: str) -> None:
         self.connectionState = state
+
+
+class _FakeTrack:
+    readyState = "live"
+
+
+class _FakeSource:
+    video = None
+    audio = _FakeTrack()
 
 
 def test_ffmpeg_seek_rebases_timestamps_to_zero():
@@ -160,6 +170,23 @@ def test_connected_peer_does_not_republish():
     spawned = _capture_spawns(pub)
     pub._recover_if_dropped(pc)
     assert spawned == []
+
+
+async def test_await_end_ignores_seek_for_live_source():
+    # A live stream (radio) has no position, so a seek must not tear it down and
+    # buffer it; here the queued skip is what ends it, proving seek was ignored.
+    pub = _publisher()
+    source = cast(MediaPlayer, _FakeSource())
+    pub._seek.set()
+    pub._skip.set()
+    assert await pub._await_end(source, interruptible=False, live=True) == "skip"
+
+
+async def test_await_end_returns_seek_for_normal_source():
+    pub = _publisher()
+    source = cast(MediaPlayer, _FakeSource())
+    pub._seek.set()
+    assert await pub._await_end(source, interruptible=False, live=False) == "seek"
 
 
 def test_position_is_none_when_idle():

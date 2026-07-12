@@ -487,7 +487,9 @@ class Publisher:
                         announced = True
                         with contextlib.suppress(RuntimeError):
                             self.on_track_change()
-                    reason = await self._await_end(source, interruptible=interruptible)
+                    reason = await self._await_end(
+                        source, interruptible=interruptible, live=resolved.live
+                    )
                 finally:
                     _stop_player(source)
                     if ffmpeg is not None:
@@ -512,12 +514,15 @@ class Publisher:
                 with contextlib.suppress(OSError):
                     os.unlink(buffer_path)
 
-    async def _await_end(self, source: MediaPlayer, *, interruptible: bool) -> str:
+    async def _await_end(
+        self, source: MediaPlayer, *, interruptible: bool, live: bool = False
+    ) -> str:
         track = source.video or source.audio
         while track is not None and track.readyState == "live":
             if self._seek.is_set():
                 self._seek.clear()
-                return "seek"
+                if not live:  # a live stream has no position to seek to; ignore it
+                    return "seek"
             if self._skip.is_set():
                 return "skip"
             # A queued user request, or a .show change/off, preempts the

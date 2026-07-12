@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # in). Off → direct-play with no subtitles and no transcode load.
     jellyfin_burn_subtitles: bool = True
 
+    # Icecast/HTTP audio stream for the .radio fallback; blank → .radio disabled.
+    radio_url: str = ""
+
     ytdlp_cookies: str = ""  # path to a cookies.txt, optional
 
     video_width: int = 1280

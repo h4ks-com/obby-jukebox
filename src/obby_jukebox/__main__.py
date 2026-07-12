@@ -124,6 +124,7 @@ async def _run() -> None:
             fallback,
             admins,
             search_cache,
+            radio_url=settings.radio_url,
             cookies=settings.ytdlp_cookies,
             position=publisher.position,
         )

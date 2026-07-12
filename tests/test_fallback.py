@@ -181,3 +181,36 @@ async def test_peek_uses_a_fresh_session_id_each_play():
 def test_configured_reflects_api_key():
     assert _fallback().configured
     assert not FallbackShow(JellyfinClient("http://jf", "")).configured
+
+
+def test_radio_is_a_looping_audio_stream():
+    fb = _fallback()
+    status = fb.set_radio("https://radio.h4ks.com/radio")
+    assert "radio.h4ks.com" in status
+    assert fb.active
+    resolved = fb.peek()
+    assert resolved is not None
+    assert resolved.media_url == "https://radio.h4ks.com/radio"
+    assert resolved.seek_url is None  # a live stream isn't server-seekable
+    assert resolved.live  # flags the player to skip seeking/buffering
+    assert fb.now_label() == "📻 radio.h4ks.com"
+    fb.advance()  # a live stream has no next; the cursor stays put
+    again = fb.peek()
+    assert again is not None and again.media_url == "https://radio.h4ks.com/radio"
+
+
+async def test_radio_and_series_are_mutually_exclusive():
+    fb = _fallback()
+    fb.set_radio("https://radio.h4ks.com/radio")
+    await fb.set_series("breaking", 1, 1)  # switching to a show drops the radio
+    assert "Breaking Bad" in (fb.now_label() or "")
+    fb.set_radio("https://radio.h4ks.com/radio")  # and back the other way
+    assert fb.now_label() == "📻 radio.h4ks.com"
+
+
+def test_clear_stops_radio():
+    fb = _fallback()
+    fb.set_radio("https://radio.h4ks.com/radio")
+    fb.clear()
+    assert not fb.active
+    assert fb.peek() is None

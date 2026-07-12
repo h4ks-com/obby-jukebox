@@ -63,6 +63,7 @@ COMMANDS: list[Command] = [
     Command("showsearch", "List matching Jellyfin series.", "name", admin=True),
     Command("movie", "Play a Jellyfin movie on loop.", "name", admin=True),
     Command("moviesearch", "List matching Jellyfin movies.", "name", admin=True),
+    Command("radio", "Play the radio station (or 'off' to stop).", "[off]", admin=True),
 ]
 
 
@@ -182,6 +183,7 @@ class CommandHandler:
         fallback: FallbackShow,
         admins: set[str],
         search_cache: SearchCache,
+        radio_url: str = "",
         cookies: str = "",
         search_fn: Callable[[str, str, int], list[YtResult]] = search_youtube,
         spawn: Callable[
@@ -199,6 +201,7 @@ class CommandHandler:
         self.fallback = fallback
         self.admins = admins
         self.search_cache = search_cache
+        self.radio_url = radio_url
         self.cookies = cookies
         self.search_fn = search_fn
         self.spawn = spawn
@@ -247,6 +250,8 @@ class CommandHandler:
             self._movie(account, arg)
         elif cmd == "moviesearch":
             self._moviesearch(account, arg)
+        elif cmd == "radio":
+            self._radio(account, arg)
         elif cmd == "help":
             self._help()
 
@@ -357,9 +362,14 @@ class CommandHandler:
         admin = " · ".join(fmt(c) for c in COMMANDS if c.admin)
         self._reply_lines([user, f"admin: {admin}"])
 
-    def _require_fallback(self, account: str | None) -> bool:
+    def _require_admin(self, account: str | None) -> bool:
         if account is None or account.casefold() not in self.admins:
             self._reply(irctext.color("admins only (log in first)", irctext.RED))
+            return False
+        return True
+
+    def _require_fallback(self, account: str | None) -> bool:
+        if not self._require_admin(account):
             return False
         if not self.fallback.configured:
             self._reply(
@@ -413,6 +423,21 @@ class CommandHandler:
         self.reload_fallback()
         self._reply(status)
 
+    def _radio(self, account: str | None, arg: str) -> None:
+        if not self._require_admin(account):
+            return
+        if not self.radio_url:
+            self._reply(irctext.color("radio not configured", irctext.RED))
+            return
+        if arg.casefold() == "off":
+            self.fallback.clear()
+            self.reload_fallback()  # stop the stream playing now, not eventually
+            self._reply(f"radio: {irctext.color('off', irctext.ORANGE)}")
+            return
+        status = self.fallback.set_radio(self.radio_url)
+        self.reload_fallback()
+        self._reply(status)
+
     def _moviesearch(self, account: str | None, arg: str) -> None:
         if not self._require_fallback(account):
             return
@@ -441,6 +466,9 @@ class CommandHandler:
         cur = self.playlist.now
         if cur is None and not self.fallback.active:
             self._reply(irctext.color("nothing playing to seek", irctext.GREY))
+            return
+        if cur is None and self.fallback.is_radio:
+            self._reply(irctext.color("can't seek the live radio stream", irctext.GREY))
             return
         if cur is not None and cur.duration is not None and seconds >= cur.duration:
             self._reply(

@@ -62,6 +62,7 @@ def _handler(
     admins: set[str] | None = None,
     yt_results: list[YtResult] | None = None,
     position: Callable[[], float | None] = lambda: None,
+    radio_url: str = "",
 ) -> Harness:
     irc = FakeIrc(nick)
     playlist = Playlist()
@@ -87,6 +88,7 @@ def _handler(
         fallback,
         admins or set(),
         cache,
+        radio_url=radio_url,
         search_fn=fake_search,
         spawn=coros.append,
         position=position,
@@ -387,3 +389,44 @@ def test_moviesearch_requires_admin():
     h.handler.on_message("eve", "$jukebox", ".moviesearch inception", account="eve")
     assert h.coros == []
     assert "admins only" in h.irc.sent[-1][1]
+
+
+def test_radio_sets_fallback_to_the_stream():
+    h = _handler(admins={"mattf"}, radio_url="https://radio.h4ks.com/radio")
+    h.handler.on_message("mattf", "$jukebox", ".radio", account="mattf")
+    assert h.fallback.active
+    resolved = h.fallback.peek()
+    assert resolved is not None
+    assert resolved.media_url == "https://radio.h4ks.com/radio"
+    assert "radio.h4ks.com" in (h.fallback.now_label() or "")
+    assert h.reloaded == [True]
+
+
+def test_radio_off_clears_fallback():
+    h = _handler(admins={"mattf"}, radio_url="https://radio.h4ks.com/radio")
+    h.handler.on_message("mattf", "$jukebox", ".radio", account="mattf")
+    h.handler.on_message("mattf", "$jukebox", ".radio off", account="mattf")
+    assert not h.fallback.active
+    assert "off" in h.irc.sent[-1][1]
+
+
+def test_radio_requires_admin():
+    h = _handler(admins={"mattf"}, radio_url="https://radio.h4ks.com/radio")
+    h.handler.on_message("eve", "$jukebox", ".radio", account="eve")
+    assert not h.fallback.active
+    assert "admins only" in h.irc.sent[-1][1]
+
+
+def test_radio_unconfigured_fails_cleanly():
+    h = _handler(admins={"mattf"})  # no radio_url
+    h.handler.on_message("mattf", "$jukebox", ".radio", account="mattf")
+    assert not h.fallback.active
+    assert "not configured" in h.irc.sent[-1][1]
+
+
+def test_seek_rejected_on_live_radio():
+    h = _handler(admins={"mattf"}, radio_url="https://radio.h4ks.com/radio")
+    h.handler.on_message("mattf", "$jukebox", ".radio", account="mattf")
+    h.handler.on_message("alice", "$jukebox", ".seek 60")
+    assert h.seeked == []  # a live stream has nothing to seek to
+    assert "can't seek" in h.irc.sent[-1][1]

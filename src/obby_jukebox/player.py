@@ -36,6 +36,8 @@ class Resolved:
     # Jellyfin sets this to seek server-side; None means a direct source that
     # ffmpeg seeks on the way in.
     seek_url: Callable[[float], str] | None = None
+    # A live stream (e.g. radio) has no fixed length or seekable position.
+    live: bool = False
 
 
 @dataclass

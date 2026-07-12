@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 from obby_jukebox.jellyfin import Episode, JellyfinClient, Movie, SeriesSummary
 from obby_jukebox.player import Resolved
@@ -20,6 +21,7 @@ class FallbackShow:
         self._cursor = 0
         self._series = ""
         self._is_movie = False
+        self._radio_url = ""
 
     @property
     def configured(self) -> bool:
@@ -47,6 +49,7 @@ class FallbackShow:
         self._episodes = eps
         self._series = series.name
         self._is_movie = False
+        self._radio_url = ""
         self._cursor = self._index_of(season, episode)
         logger.info(
             "fallback set to %s starting at S%02dE%02d", series.name, season, episode
@@ -69,9 +72,29 @@ class FallbackShow:
         ]
         self._series = f"{movie.name} ({movie.year})" if movie.year else movie.name
         self._is_movie = True
+        self._radio_url = ""
         self._cursor = 0
         logger.info("fallback set to movie %s", movie.name)
         return self.status()
+
+    def set_radio(self, url: str) -> str:
+        """Play a live radio stream when idle. It has no video, so the loop shows
+        a visualizer; it never ends, so the cursor/advance machinery is unused."""
+        self._episodes = []
+        self._series = ""
+        self._is_movie = False
+        self._cursor = 0
+        self._radio_url = url
+        logger.info("fallback set to radio %s", url)
+        return self.status()
+
+    @property
+    def is_radio(self) -> bool:
+        return bool(self._radio_url)
+
+    def _radio_label(self) -> str:
+        host = urlsplit(self._radio_url).hostname
+        return f"📻 {host}" if host else "📻 radio"
 
     def _index_of(self, season: int, episode: int) -> int:
         for i, ep in enumerate(self._episodes):
@@ -86,6 +109,8 @@ class FallbackShow:
         return f"{label} — {ep.title}" if ep.title else label
 
     def peek(self) -> Resolved | None:
+        if self._radio_url:
+            return Resolved(self._radio_url, self._radio_label(), live=True)
         if not self._episodes:
             return None
         ep = self._episodes[self._cursor]
@@ -112,15 +137,19 @@ class FallbackShow:
             self._cursor = (self._cursor + 1) % len(self._episodes)
 
     def now_label(self) -> str | None:
+        if self._radio_url:
+            return self._radio_label()
         if not self._episodes:
             return None
         return self._label(self._episodes[self._cursor])
 
     @property
     def active(self) -> bool:
-        return bool(self._episodes)
+        return bool(self._episodes) or bool(self._radio_url)
 
     def status(self) -> str:
+        if self._radio_url:
+            return f"radio: {self._radio_label()}"
         if not self._episodes:
             return "fallback: off"
         if self._is_movie:
@@ -132,4 +161,5 @@ class FallbackShow:
         self._episodes = []
         self._series = ""
         self._is_movie = False
+        self._radio_url = ""
         self._cursor = 0
