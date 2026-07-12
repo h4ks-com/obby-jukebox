@@ -89,9 +89,10 @@ async def test_every_visualizer_style_renders_a_valid_frame():
         track = JukeboxVideoTrack(320, 240, fps=30, meter=meter)
         track.show_visualizer()
         track._vis_style = style
-        frame = await track.recv()
-        assert (frame.width, frame.height) == (320, 240)
-        assert frame.format.name == "yuv420p"
+        for _ in range(3):  # several frames so stateful styles (starfield) advance
+            frame = await track.recv()
+            assert (frame.width, frame.height) == (320, 240)
+            assert frame.format.name == "yuv420p"
 
 
 def test_show_visualizer_picks_a_style_in_range():

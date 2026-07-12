@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import colorsys
 import fractions
 import math
 import os
@@ -41,7 +42,19 @@ _VIS_GRAVITY = 0.045  # how fast a bar falls back per frame once the level drops
 _METER_GAIN = 5.0  # music RMS lands around 0.1-0.3; scale it up to fill the bars
 # Visualizer styles, indexed by _vis_style (order matches _render_visualizer's
 # dispatch). One is picked at random per audio-only item; .vis changes it live.
-VIS_NAMES = ("bars", "mirror", "radial", "wave", "pulse")
+VIS_NAMES = (
+    "bars",
+    "mirror",
+    "radial",
+    "wave",
+    "pulse",
+    "spiral",
+    "starfield",
+    "lissajous",
+    "orbit",
+    "tunnel",
+    "grid",
+)
 _VIS_STYLES = len(VIS_NAMES)
 
 
@@ -155,6 +168,7 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._vis_tick = 0
         self._vis_style = 0
         self._bar_colors = [_bar_color(i) for i in range(_VIS_BARS)]
+        self._stars: list[list[float]] = []  # [radius, angle] per star, for starfield
         self.last_frame_at = 0.0
 
     def set_source(self, track: MediaStreamTrack) -> None:
@@ -308,6 +322,131 @@ class JukeboxVideoTrack(MediaStreamTrack):
         blob = span * 0.06 * (1.0 + level)
         draw.ellipse((cx - blob, cy - blob, cx + blob, cy + blob), fill=(60, 220, 200))
 
+    def _draw_spiral(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        span = min(self._width, self._height)
+        rot = self._vis_tick * 0.02
+        dots = 96
+        for arm in (0.0, math.pi):
+            for i in range(dots):
+                frac = i / dots
+                ang = frac * math.pi * 5 + rot + arm
+                rad = span * (0.02 + frac * (0.30 + 0.12 * level))
+                x, y = cx + math.cos(ang) * rad, cy + math.sin(ang) * rad
+                size = 1.0 + frac * 3.0 * (0.6 + level)
+                color = self._bar_colors[int(frac * (_VIS_BARS - 1))]
+                draw.ellipse((x - size, y - size, x + size, y + size), fill=color)
+
+    def _draw_starfield(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        edge = math.hypot(cx, cy)
+        if not self._stars:
+            self._stars = [
+                [random.uniform(2, edge), random.uniform(0, 2 * math.pi)]
+                for _ in range(70)
+            ]
+        speed = 3.0 + level * 45.0
+        for star in self._stars:
+            near = star[0]
+            star[0] += speed * (0.25 + star[0] / edge)
+            if star[0] >= edge:
+                star[0], star[1] = random.uniform(2, 30), random.uniform(0, 2 * math.pi)
+                near = star[0]
+            ca, sa = math.cos(star[1]), math.sin(star[1])
+            bright = min(255, int(50 + 230 * star[0] / edge))
+            draw.line(
+                (cx + ca * near, cy + sa * near, cx + ca * star[0], cy + sa * star[0]),
+                fill=(bright, bright, min(255, bright + 25)),
+                width=1 if star[0] < edge * 0.6 else 2,
+            )
+
+    def _draw_lissajous(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        ax, ay = self._width * 0.42, self._height * 0.42
+        gain = 0.35 + 0.65 * level
+        phase = self._vis_tick * 0.02
+        points = []
+        for i in range(201):
+            t = 2 * math.pi * i / 200
+            points.append(
+                (
+                    cx + ax * gain * math.sin(3 * t + phase),
+                    cy + ay * gain * math.sin(2 * t),
+                )
+            )
+        draw.line(points, fill=_hsv(self._vis_tick * 0.004, 0.7, 1.0), width=2)
+
+    def _draw_orbit(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        span = min(self._width, self._height) * 0.42
+        rx, ry = span * (0.55 + 0.25 * level), span * 0.32
+        for k in range(3):
+            rot = self._vis_tick * 0.03 + k * math.pi / 3
+            cr, sr = math.cos(rot), math.sin(rot)
+            ring = []
+            for i in range(61):
+                a = 2 * math.pi * i / 60
+                ex, ey = rx * math.cos(a), ry * math.sin(a)
+                ring.append((cx + ex * cr - ey * sr, cy + ex * sr + ey * cr))
+            draw.line(ring, fill=self._bar_colors[k * 12], width=1)
+            ea = self._vis_tick * 0.16 + k * 2.1
+            ex, ey = rx * math.cos(ea), ry * math.sin(ea)
+            px, py = cx + ex * cr - ey * sr, cy + ex * sr + ey * cr
+            draw.ellipse(
+                (px - 5, py - 5, px + 5, py + 5), fill=self._bar_colors[k * 12]
+            )
+        nucleus = span * 0.12 * (1.0 + level)
+        draw.ellipse(
+            (cx - nucleus, cy - nucleus, cx + nucleus, cy + nucleus),
+            fill=(255, 230, 120),
+        )
+
+    def _draw_tunnel(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cx, cy = self._width / 2, self._height / 2
+        span = min(self._width, self._height) * 0.55
+        sides, layers = 6, 14
+        depths = sorted(
+            ((k / layers + self._vis_tick * 0.008) % 1.0 for k in range(layers)),
+            reverse=True,  # farthest first so the nearest ring lands on top
+        )
+        for depth in depths:
+            rad = span * depth * (0.9 + 0.25 * level)
+            twist = self._vis_tick * 0.02 + depth * 2.5
+            poly = [
+                (
+                    cx + math.cos(2 * math.pi * s / sides + twist) * rad,
+                    cy + math.sin(2 * math.pi * s / sides + twist) * rad,
+                )
+                for s in range(sides + 1)
+            ]
+            near = 1.0 - depth
+            draw.line(
+                poly, fill=(int(60 * near), int(150 * near), int(255 * near)), width=2
+            )
+
+    def _draw_grid(self, draw: ImageDraw.ImageDraw, level: float) -> None:
+        cols, rows = 22, 12
+        cell_w, cell_h = self._width / cols, self._height / rows
+        radius = min(cell_w, cell_h) * 0.36
+        for r in range(rows):
+            for c in range(cols):
+                pulse = math.sin(c * 0.5 - self._vis_tick * 0.12) * math.cos(
+                    r * 0.45 + self._vis_tick * 0.05
+                )
+                value = (0.5 + 0.5 * pulse) * min(1.0, level * 1.6)
+                if value < 0.06:
+                    continue
+                base = self._bar_colors[int((c / cols) * (_VIS_BARS - 1))]
+                color = (
+                    int(base[0] * value),
+                    int(base[1] * value),
+                    int(base[2] * value),
+                )
+                x, y = c * cell_w + cell_w / 2, r * cell_h + cell_h / 2
+                draw.ellipse(
+                    (x - radius, y - radius, x + radius, y + radius), fill=color
+                )
+
     def _letterbox(self, raw: av.VideoFrame) -> av.VideoFrame:
         """Scale the source into the fixed output size preserving its aspect
         ratio, centered with black bars — so portrait/4:3 sources aren't
@@ -364,6 +503,11 @@ def _frame_rms(frame: av.AudioFrame) -> float:
 def _bar_color(index: int) -> tuple[int, int, int]:
     t = index / max(1, _VIS_BARS - 1)
     return (int(30 + t * 200), int(210 - t * 150), int(190 + t * 40))
+
+
+def _hsv(hue: float, sat: float, val: float) -> tuple[int, int, int]:
+    r, g, b = colorsys.hsv_to_rgb(hue % 1.0, sat, val)
+    return (int(r * 255), int(g * 255), int(b * 255))
 
 
 def _silent_frame() -> av.AudioFrame:
