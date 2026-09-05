@@ -55,7 +55,7 @@
       <div><a class="site-title" href="https://h4ks.com/">h4ks tv</a>
         <div class="tagline">a community of hackers, self-hosters &amp; builders</div></div>
       <nav><a href="https://chat.h4ks.com/">chat</a><a href="https://radio.h4ks.com/">radio</a>
-        <a href="https://live.t3ks.com/livegames/">livegames</a><a href="https://h4ks.com/">h4ks ↗</a></nav>
+        <a href="https://h4ks.com/">h4ks ↗</a></nav>
     </header>
     <div class="label">on air</div>
     <section class="stage">
@@ -101,34 +101,42 @@
     // from the SFU, including the jukebox visualizer for radio items.
     const channel = '$tv';
     const rtcTag = '+obsidianirc/rtc';
-    const ircUrl = `wss://${location.hostname === 'tv.h4ks.com' ? 'irc.h4ks.com' : location.hostname}:443`;
+    const ircUrl = 'wss://irc.h4ks.com:443';
     function unescapeTag(value) { return value.replace(/\\([:s\\rn])/g, (_, c) => { if (c === ':') return ';'; if (c === 's') return ' '; if (c === 'r') return '\r'; if (c === 'n') return '\n'; return '\\'; }); }
     function escapeTag(value) { return value.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s').replace(/\r/g, '\\r').replace(/\n/g, '\\n'); }
     function tagMessages(line) {
       if (!line.startsWith('@')) return null;
       const end = line.indexOf(' '); if (end < 0) return null;
       const tags = {};
-      line.slice(1, end).split(';').forEach((part) => { const [key, value = null] = part.split('=', 2); tags[key] = value === null ? null : unescapeTag(value); });
+      // Split on the FIRST '=' only: String.split with a limit drops the rest of
+      // the value, and TURN URLs carry their own '=' signs.
+      line.slice(1, end).split(';').forEach((part) => { const eq = part.indexOf('='); tags[eq < 0 ? part : part.slice(0, eq)] = eq < 0 ? null : unescapeTag(part.slice(eq + 1)); });
       return tags;
     }
     function sendSignal(socket, signal) {
-      const raw = JSON.stringify({...signal, channel});
+      const full = {...signal, channel};
+      const raw = JSON.stringify(full);
       const pieces = [];
-      if (raw.length < 7000 || !signal.sdp) pieces.push(signal);
-      else { const id = crypto.randomUUID().slice(0, 12); const size = 3000; for (let i = 0; i < signal.sdp.length; i += size) pieces.push({...signal, sdp: signal.sdp.slice(i, i + size), id, seq: pieces.length, total: Math.ceil(signal.sdp.length / size)}); }
+      if (raw.length < 7000 || !signal.sdp) pieces.push(full);
+      else { const id = crypto.randomUUID().slice(0, 12); const size = 3000; for (let i = 0; i < signal.sdp.length; i += size) pieces.push({...full, sdp: signal.sdp.slice(i, i + size), id, seq: pieces.length, total: Math.ceil(signal.sdp.length / size)}); }
       pieces.forEach((part) => socket.send(`@${rtcTag}=${escapeTag(JSON.stringify(part))} TAGMSG ${channel}\r\n`));
     }
     async function connectTv() {
       if (viewer) return;
       const socket = new WebSocket(ircUrl);
       const nick = `tv-${crypto.randomUUID().slice(0, 8)}`;
-      const pending = new Map(); let pc; let joined = false;
+      const pending = new Map(); const earlyIce = []; let pc; let joined = false; let capRequested = false; let asked = false;
       viewer = {socket, close: () => { socket.close(); pc?.close(); viewer = null; }};
       socket.onopen = () => { socket.send('CAP LS 302\r\n'); socket.send(`NICK ${nick}\r\nUSER ${nick} 0 * :h4ks tv\r\n`); };
       socket.onmessage = async (event) => {
         const text = String(event.data); for (const line of text.split(/\r?\n/)) {
           if (!line) continue; if (line.startsWith('PING')) { socket.send(`PONG ${line.slice(5)}\r\n`); continue; }
-          if (line.includes(' 001 ')) { socket.send('CAP END\r\n'); socket.send(`JOIN ${channel}\r\n`); continue; }
+          // The server answers 403 on a voice channel unless we hold obsidianirc/voice,
+          // and the SFU only starts a session once we ask to join it by signal.
+          if (line.includes(' CAP ') && line.includes(' LS ') && !capRequested) { capRequested = true; socket.send('CAP REQ :message-tags obsidianirc/voice\r\n'); continue; }
+          if (line.includes(' CAP ') && (line.includes(' ACK ') || line.includes(' NAK '))) { socket.send('CAP END\r\n'); continue; }
+          if (line.includes(' 001 ')) { socket.send(`JOIN ${channel}\r\n`); continue; }
+          if (!asked && line.includes(` JOIN `) && line.includes(nick)) { asked = true; sendSignal(socket, {type: 'join'}); continue; }
           const tags = tagMessages(line); const raw = tags?.[rtcTag]; if (!raw) continue;
           let signal; try { signal = JSON.parse(raw); } catch { continue; }
           if (signal.total) { const key = signal.id; const entry = pending.get(key) ?? {parts: [], total: signal.total, base: signal}; entry.parts[signal.seq] = signal.sdp; pending.set(key, entry); if (entry.parts.filter(Boolean).length < entry.total) continue; signal = {...entry.base, sdp: entry.parts.join('')}; pending.delete(key); }
@@ -138,8 +146,16 @@
             pc.ontrack = (event) => { if (event.streams[0]) video.srcObject = event.streams[0]; status.textContent = '● LIVE'; status.className = 'live'; video.play().catch(() => {}); };
             pc.onicecandidate = (event) => { if (event.candidate) sendSignal(socket, {type: 'ice', cand: event.candidate.candidate, mid: event.candidate.sdpMid, mlineidx: event.candidate.sdpMLineIndex}); };
             await pc.setLocalDescription(await pc.createOffer()); sendSignal(socket, {type: 'offer', sdp: pc.localDescription.sdp});
-          } else if (signal.type === 'answer' && pc) await pc.setRemoteDescription({type: 'answer', sdp: signal.sdp});
-          else if (signal.type === 'ice' && pc && pc.remoteDescription) await pc.addIceCandidate({candidate: signal.cand, sdpMid: signal.mid, sdpMLineIndex: signal.mlineidx});
+          } else if (signal.type === 'answer' && pc) {
+            await pc.setRemoteDescription({type: 'answer', sdp: signal.sdp});
+            // The SFU trickles its candidates right behind the answer, so some
+            // arrive while setRemoteDescription is still pending and can only be
+            // added once it lands.
+            while (earlyIce.length) await pc.addIceCandidate(earlyIce.shift());
+          } else if (signal.type === 'ice' && pc) {
+            const candidate = {candidate: signal.cand, sdpMid: signal.mid, sdpMLineIndex: signal.mlineidx};
+            if (pc.remoteDescription) await pc.addIceCandidate(candidate); else earlyIce.push(candidate);
+          }
         }
       };
       socket.onerror = () => { status.textContent = 'stream unavailable'; status.className = 'offline'; };
