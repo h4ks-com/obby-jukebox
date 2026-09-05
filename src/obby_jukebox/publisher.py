@@ -25,6 +25,7 @@ from aiortc import (
     RTCConfiguration,
     RTCIceServer,
     RTCPeerConnection,
+    RTCRtpSender,
     RTCSessionDescription,
 )
 from aiortc.contrib.media import MediaPlayer
@@ -262,6 +263,7 @@ class Publisher:
         )
         pc.addTrack(self._audio)
         pc.addTrack(self._video)
+        _prefer_h264(pc)
         await pc.setLocalDescription(await pc.createOffer())
         offer_lines = encode_signal(
             self.channel, {"type": "offer", "sdp": pc.localDescription.sdp}
@@ -574,6 +576,20 @@ def _ignore_result[T](task: asyncio.Future[T]) -> None:
     unretrieved exception."""
     if not task.cancelled():
         task.exception()
+
+
+def _prefer_h264(pc: RTCPeerConnection) -> None:
+    """Offer H264 ahead of VP8. Both encoders ignore the resolution when picking
+    a ceiling, and aiortc caps VP8 at 1.5 Mbps against H264's 3, which is the
+    difference between a soft 720p picture and a sharp one. Falls back to
+    whatever else is on offer if this build has no H264."""
+    codecs = RTCRtpSender.getCapabilities("video").codecs
+    ranked = [c for c in codecs if "H264" in c.mimeType] + [
+        c for c in codecs if "H264" not in c.mimeType
+    ]
+    for transceiver in pc.getTransceivers():
+        if transceiver.kind == "video":
+            transceiver.setCodecPreferences(ranked)
 
 
 def _stop_player(source: MediaPlayer) -> None:
