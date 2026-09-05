@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from obby_jukebox.player import Item, Playlist, QueueFull
+from obby_jukebox.fallback import FallbackShow
+from obby_jukebox.player import Item, Playlist, QueueFull, Resolved
 
 
 class AddRequest(BaseModel):
@@ -31,6 +34,41 @@ class SeekRequest(BaseModel):
     seconds: float
 
 
+class FallbackResource(BaseModel):
+    url: HttpUrl
+    title: str = Field(min_length=1, max_length=240)
+    live: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def https_only(cls, value: HttpUrl) -> HttpUrl:
+        if value.scheme != "https":
+            raise ValueError("fallback URLs must use HTTPS")
+        return value
+
+
+class FallbackRequest(BaseModel):
+    resources: list[FallbackResource] = Field(default_factory=list, max_length=100)
+
+
+class FallbackResourceOut(BaseModel):
+    url: str
+    title: str
+    live: bool
+
+
+class TvState(BaseModel):
+    now: ItemOut | None
+    position: float | None
+    fallback: str | None
+    queue: list[ItemOut]
+
+
+class FallbackUpdate(BaseModel):
+    status: str
+    count: int
+
+
 def _out(item: Item) -> ItemOut:
     return ItemOut(id=item.id, url=item.url, title=item.title, duration=item.duration)
 
@@ -40,6 +78,8 @@ def create_app(
     wake: Callable[[], None],
     skip: Callable[[], None],
     seek: Callable[[float], None],
+    fallback: FallbackShow | None = None,
+    position: Callable[[], float | None] = lambda: None,
     api_key: str = "",
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
@@ -74,6 +114,47 @@ def create_app(
         cur = playlist.now
         return _out(cur) if cur else None
 
+    @app.get("/tv/state", response_model=TvState)
+    def tv_state() -> TvState:
+        cur = playlist.now
+        return TvState(
+            now=_out(cur) if cur else None,
+            position=position(),
+            fallback=fallback.status() if fallback else None,
+            queue=[_out(item) for item in playlist.upcoming()],
+        )
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/tv", include_in_schema=False)
+    def tv_page() -> FileResponse:
+        return FileResponse(_TV_TEMPLATE)
+
+    @app.put("/fallback", dependencies=[Depends(auth)])
+    def set_fallback(req: FallbackRequest) -> FallbackUpdate:
+        if fallback is None:
+            raise HTTPException(status_code=503, detail="fallback unavailable")
+        fallback.set_external(
+            [
+                Resolved(str(item.url), item.title, live=item.live)
+                for item in req.resources
+            ]
+        )
+        wake()
+        return FallbackUpdate(status="updated", count=len(req.resources))
+
+    @app.get(
+        "/fallback",
+        dependencies=[Depends(auth)],
+        response_model=list[FallbackResourceOut],
+    )
+    def get_fallback() -> list[FallbackResourceOut]:
+        if fallback is None:
+            return []
+        return [
+            FallbackResourceOut(url=item.media_url, title=item.title, live=item.live)
+            for item in fallback.external()
+        ]
+
     @app.post("/skip", dependencies=[Depends(auth)])
     def do_skip() -> dict[str, str]:
         skip()
@@ -90,3 +171,6 @@ def create_app(
         return {"status": "cleared"}
 
     return app
+
+
+_TV_TEMPLATE = Path(__file__).parent / "templates" / "tv.html"

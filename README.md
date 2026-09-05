@@ -60,7 +60,11 @@ It needs an IRC server with WebRTC stream channels (the `obsidianirc/voice`
 capability) and a client such as [Obby](https://github.com/obbyworld/obby) to
 watch. Stream channels are `$`-prefixed (e.g. `$tv`), not regular `#` channels.
 The REST API on `:8080` mirrors the queue: `POST /queue`, `GET /queue`,
-`GET /now`, `POST /skip`, `POST /seek`, `POST /clear`.
+`GET /now`, `POST /skip`, `POST /seek`, `POST /clear`. The TV status page is
+served at `/tv`, with public state at `/tv/state`. n8n can replace the
+fallback-only resource list with authenticated `PUT /fallback`; this never
+enters the human request queue. Human and admin queue requests remain
+authoritative and interrupt fallback immediately.
 
 ## Develop
 

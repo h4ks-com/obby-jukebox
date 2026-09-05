@@ -81,7 +81,17 @@ async def _run() -> None:
         if live["publisher"] is not None:
             live["publisher"].seek(seconds)
 
-    app = create_app(playlist, wake, skip, seek, api_key=settings.api_key)
+    app = create_app(
+        playlist,
+        wake,
+        skip,
+        seek,
+        fallback=fallback,
+        position=lambda: (
+            live["publisher"].position() if live["publisher"] is not None else None
+        ),
+        api_key=settings.api_key,
+    )
     server = uvicorn.Server(
         uvicorn.Config(
             app,

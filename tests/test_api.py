@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from obby_jukebox.api import create_app
+from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.player import Playlist
 
 
@@ -61,3 +62,42 @@ def test_api_key_enforced():
     assert ok.status_code == 201
     # health stays open
     assert client.get("/healthz").status_code == 200
+
+
+def test_tv_page_and_fallback_automation_are_separate_from_queue():
+    pl = Playlist()
+    fallback = MagicMock(spec=FallbackShow)
+    fallback.status.return_value = "fallback: radio"
+    fallback.external.return_value = []
+    wake = MagicMock()
+    client = TestClient(
+        create_app(
+            pl,
+            wake,
+            MagicMock(),
+            MagicMock(),
+            fallback=fallback,
+            api_key="secret",
+        )
+    )
+
+    assert client.get("/").status_code == 200
+    assert client.get("/tv").status_code == 200
+    state = client.get("/tv/state").json()
+    assert state["now"] is None
+    assert state["fallback"] == "fallback: radio"
+
+    response = client.put(
+        "/fallback",
+        json={
+            "resources": [
+                {"url": "https://radio.example/live", "title": "Radio", "live": True}
+            ]
+        },
+        headers={"X-API-Key": "secret"},
+    )
+    assert response.status_code == 200
+    fallback.set_external.assert_called_once()
+    wake.assert_called_once()
+    queue = client.get("/queue", headers={"X-API-Key": "secret"}).json()
+    assert queue["upcoming"] == []
