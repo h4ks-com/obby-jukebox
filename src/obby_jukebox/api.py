@@ -64,6 +64,7 @@ class TvState(BaseModel):
     queue: list[ItemOut]
     stream_url: str | None
     stream_title: str | None
+    fallback_queue: list[str]
 
 
 class FallbackUpdate(BaseModel):
@@ -142,6 +143,7 @@ def create_app(
             queue=[_out(item) for item in playlist.upcoming()],
             stream_url=stream_url or None,
             stream_title=browser_title,
+            fallback_queue=fallback.queue_labels() if fallback else [],
         )
 
     @app.get("/", include_in_schema=False)

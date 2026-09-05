@@ -33,6 +33,16 @@
     .offline { color: var(--dim); }
     .info { display: grid; gap: 2rem; grid-template-columns: 2fr 1fr; }
     .panel { background: var(--panel); border: 1px solid var(--border); padding: 1rem; }
+    .queues { display: grid; gap: 1rem; }
+    .queue-card { background: var(--panel); border: 1px solid var(--border); padding: 1rem; }
+    .queue-card.human { border-left: 3px solid var(--blue); position: relative; z-index: 2; }
+    .queue-card.fallback { border-left: 3px solid var(--orange); margin-left: 1.5rem; margin-top: -.5rem; }
+    .queue-card h3 { font: bold .78rem 'Courier New', monospace; letter-spacing: .1em;
+      margin: 0 0 .6rem; text-transform: uppercase; }
+    .queue-card.human h3 { color: var(--blue); }
+    .queue-card.fallback h3 { color: var(--orange); }
+    ol { color: var(--mid); margin: 0; padding-left: 1.4rem; }
+    li { padding: .2rem 0; }
     h1, h2, p { margin-top: 0; } h2 { font-size: 1.1rem; }
     .muted { color: var(--dim); }
     @media (max-width: 700px) { .container { padding: 0 1rem 2rem; }
@@ -54,10 +64,15 @@
         <span id="source" class="muted">waiting for a browser stream</span></div>
     </section>
     <div class="info">
-      <section><div class="label">now showing</div><div class="panel"><h2 id="now">nothing on air</h2>
-        <p id="fallback" class="muted">waiting for a fallback</p></div></section>
+      <section><div class="label">programme stack</div><div class="queues">
+        <div class="queue-card human"><h3>human requests · priority</h3>
+          <ol id="human-queue"><li class="muted">empty — fallback can play</li></ol></div>
+        <div class="queue-card fallback"><h3>automation fallback · resumes underneath</h3>
+          <ol id="fallback-queue"><li class="muted">none configured</li></ol></div>
+      </div></section>
       <section><div class="label">the room</div><div class="panel"><p class="muted">
-        Community television assembled from lives, games, videos, and music.</p>
+        <strong id="now">nothing on air</strong><br><span id="fallback">waiting for a fallback</span></p>
+        <p class="muted">Community television assembled from lives, games, videos, and music.</p>
         <a href="https://chat.h4ks.com/?channel=%24tv">join the $tv room ↗</a></div></section>
     </div>
   </div>
@@ -65,7 +80,21 @@
     const video = document.getElementById('video');
     const status = document.getElementById('status');
     const source = document.getElementById('source');
+    const now = document.getElementById('now');
+    const fallback = document.getElementById('fallback');
+    const humanQueue = document.getElementById('human-queue');
+    const fallbackQueue = document.getElementById('fallback-queue');
     let reader;
+
+    function renderList(element, entries, empty) {
+      element.replaceChildren();
+      (entries.length ? entries : [empty]).forEach((entry) => {
+        const item = document.createElement('li');
+        item.textContent = entry;
+        if (!entries.length) item.className = 'muted';
+        element.append(item);
+      });
+    }
 
     async function playWhep(url) {
       if (reader) reader.close();
@@ -95,6 +124,9 @@
         const data = await response.json();
         now.textContent = data.now?.title || 'nothing on air';
         fallback.textContent = data.fallback || 'waiting for a fallback';
+        renderList(humanQueue, data.queue.map((item) => item.title || item.url),
+          'empty — fallback can play');
+        renderList(fallbackQueue, data.fallback_queue, 'none configured');
         source.textContent = data.stream_url ? 'direct WebRTC/WHEP source' : 'no browser source configured';
         if (data.stream_url && !reader) await playWhep(data.stream_url);
       } catch (error) {

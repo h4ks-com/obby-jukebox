@@ -167,6 +167,22 @@ class FallbackShow:
     def external(self) -> list[Resolved]:
         return list(self._external)
 
+    def queue_labels(self) -> list[str]:
+        """Return the fallback programme order without resolving media URLs."""
+        if self._external:
+            return [
+                self._external[(self._external_cursor + i) % len(self._external)].title
+                for i in range(len(self._external))
+            ]
+        if self._radio_url:
+            return [self._radio_label()]
+        if not self._episodes:
+            return []
+        return [
+            self._label(self._episodes[(self._cursor + i) % len(self._episodes)])
+            for i in range(len(self._episodes))
+        ]
+
     def status(self) -> str:
         if self._external:
             item = self._external[self._external_cursor % len(self._external)]

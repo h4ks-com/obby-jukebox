@@ -70,6 +70,7 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
     fallback.status.return_value = "fallback: radio"
     fallback.active = False
     fallback.external.return_value = []
+    fallback.queue_labels.return_value = []
     wake = MagicMock()
     client = TestClient(
         create_app(
