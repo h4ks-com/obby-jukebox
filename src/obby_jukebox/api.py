@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.player import Item, Playlist, QueueFull, Resolved
+
+# Whatever ffmpeg can open directly, which covers every MediaMTX output (RTSP,
+# RTMP, SRT, WebRTC-adjacent HLS) as well as plain files and icecast.
+_STREAM_SCHEMES = frozenset(
+    {"http", "https", "rtsp", "rtsps", "rtmp", "rtmps", "srt", "udp"}
+)
 
 
 class AddRequest(BaseModel):
@@ -35,16 +42,23 @@ class SeekRequest(BaseModel):
 
 
 class FallbackResource(BaseModel):
-    url: HttpUrl
+    url: str = Field(min_length=1, max_length=2048)
     title: str = Field(min_length=1, max_length=240)
     live: bool = False
 
     @field_validator("url")
     @classmethod
-    def https_only(cls, value: HttpUrl) -> HttpUrl:
-        if value.scheme != "https":
-            raise ValueError("fallback URLs must use HTTPS")
+    def playable(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme not in _STREAM_SCHEMES or not parts.netloc:
+            raise ValueError(f"unsupported stream URL: {value!r}")
         return value
+
+    @property
+    def is_live(self) -> bool:
+        # A stream protocol has no end and no seekable position; treating one as
+        # a file wedges the media loop buffering an infinite source.
+        return self.live or urlsplit(self.url).scheme not in ("http", "https")
 
 
 class FallbackRequest(BaseModel):
@@ -158,7 +172,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="fallback unavailable")
         fallback.set_external(
             [
-                Resolved(str(item.url), item.title, live=item.live)
+                Resolved(item.url, item.title, live=item.is_live)
                 for item in req.resources
             ]
         )
