@@ -140,6 +140,10 @@
           const tags = tagMessages(line); const raw = tags?.[rtcTag]; if (!raw) continue;
           let signal; try { signal = JSON.parse(raw); } catch { continue; }
           if (signal.total) { const key = signal.id; const entry = pending.get(key) ?? {parts: [], total: signal.total, base: signal}; entry.parts[signal.seq] = signal.sdp; pending.set(key, entry); if (entry.parts.filter(Boolean).length < entry.total) continue; signal = {...entry.base, sdp: entry.parts.join('')}; pending.delete(key); }
+          // The SFU hands the streamer slot to whoever is around when the
+          // jukebox re-publishes. This page only ever watches, so holding the
+          // slot would leave the channel with nobody publishing at all.
+          if (signal.role === 'streamer' && (signal.type === 'joined' || (signal.type === 'role' && signal.member === nick))) sendSignal(socket, {type: 'demote', target: nick});
           if (signal.type === 'joined' && !joined) {
             joined = true; pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}, ...(signal.turn ? [{urls: signal.turn.urls, username: signal.turn.username, credential: signal.turn.password}] : [])]});
             pc.addTransceiver('audio', {direction: 'recvonly'}); pc.addTransceiver('video', {direction: 'recvonly'});
