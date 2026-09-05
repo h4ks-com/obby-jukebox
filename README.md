@@ -64,7 +64,10 @@ The REST API on `:8080` mirrors the queue: `POST /queue`, `GET /queue`,
 served at `/tv`, with public state at `/tv/state`. n8n can replace the
 fallback-only resource list with authenticated `PUT /fallback`; this never
 enters the human request queue. Human and admin queue requests remain
-authoritative and interrupt fallback immediately. A fallback resource is any
+authoritative and interrupt fallback immediately. `.show`, `.movie` and `.radio`
+hold the channel against that list until `.show off` or `.radio off` releases it;
+the list keeps refreshing underneath and resumes the moment the hold ends. A
+fallback resource is any
 URL ffmpeg can open — an HTTP(S) file or HLS playlist, or `rtsp://`, `rtmp://`,
 `srt://` straight off MediaMTX. Stream protocols always count as live, so the
 programme never tries to seek or buffer them. Give a resource `max_seconds` to

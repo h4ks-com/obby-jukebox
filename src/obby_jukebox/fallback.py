@@ -22,12 +22,20 @@ class FallbackShow:
         self._series = ""
         self._is_movie = False
         self._radio_url = ""
+        self._held = False
         self._external: list[Resolved] = []
         self._external_cursor = 0
 
     @property
     def configured(self) -> bool:
         return self._jelly.configured
+
+    @property
+    def _manual(self) -> bool:
+        """An admin's chosen show, movie or radio holds the channel until they
+        turn it off. Automation keeps refreshing its queue underneath, so it
+        picks up again the moment the hold is released."""
+        return self._held and (bool(self._episodes) or bool(self._radio_url))
 
     async def search_detailed(self, query: str, limit: int = 5) -> list[SeriesSummary]:
         results = await self._jelly.search_series(query, limit)
@@ -52,7 +60,7 @@ class FallbackShow:
         self._series = series.name
         self._is_movie = False
         self._radio_url = ""
-        self._external = []
+        self._held = True
         self._cursor = self._index_of(season, episode)
         logger.info(
             "fallback set to %s starting at S%02dE%02d", series.name, season, episode
@@ -76,7 +84,7 @@ class FallbackShow:
         self._series = f"{movie.name} ({movie.year})" if movie.year else movie.name
         self._is_movie = True
         self._radio_url = ""
-        self._external = []
+        self._held = True
         self._cursor = 0
         logger.info("fallback set to movie %s", movie.name)
         return self.status()
@@ -89,7 +97,7 @@ class FallbackShow:
         self._is_movie = False
         self._cursor = 0
         self._radio_url = url
-        self._external = []
+        self._held = True
         logger.info("fallback set to radio %s", url)
         return self.status()
 
@@ -114,7 +122,7 @@ class FallbackShow:
         return f"{label} — {ep.title}" if ep.title else label
 
     def peek(self) -> Resolved | None:
-        if self._external:
+        if not self._manual and self._external:
             return self._external[self._external_cursor % len(self._external)]
         if self._radio_url:
             return Resolved(
@@ -142,14 +150,14 @@ class FallbackShow:
         return build
 
     def advance(self) -> None:
-        if self._external:
+        if not self._manual and self._external:
             self._external_cursor = (self._external_cursor + 1) % len(self._external)
             return
         if self._episodes:
             self._cursor = (self._cursor + 1) % len(self._episodes)
 
     def now_label(self) -> str | None:
-        if self._external:
+        if not self._manual and self._external:
             return self._external[self._external_cursor % len(self._external)].title
         if self._radio_url:
             return self._radio_label()
@@ -171,7 +179,7 @@ class FallbackShow:
 
     def queue_labels(self) -> list[str]:
         """Return the fallback programme order without resolving media URLs."""
-        if self._external:
+        if not self._manual and self._external:
             return [
                 self._external[(self._external_cursor + i) % len(self._external)].title
                 for i in range(len(self._external))
@@ -186,7 +194,7 @@ class FallbackShow:
         ]
 
     def status(self) -> str:
-        if self._external:
+        if not self._manual and self._external:
             item = self._external[self._external_cursor % len(self._external)]
             return f"fallback: {item.title}"
         if self._radio_url:
@@ -199,10 +207,11 @@ class FallbackShow:
         return f"fallback: {self._series} (next S{ep.season:02d}E{ep.number:02d})"
 
     def clear(self) -> None:
+        """Release the hold. The automation queue is left standing so `.show off`
+        hands the channel straight back to it instead of to dead air."""
         self._episodes = []
         self._series = ""
         self._is_movie = False
         self._radio_url = ""
-        self._external = []
-        self._external_cursor = 0
+        self._held = False
         self._cursor = 0

@@ -3,6 +3,7 @@ import pytest
 
 from obby_jukebox.fallback import FallbackShow
 from obby_jukebox.jellyfin import JellyfinClient
+from obby_jukebox.player import Resolved
 
 SERIES = [{"Id": "s1", "Name": "Breaking Bad", "ProductionYear": 2008}]
 EPISODES = [
@@ -214,3 +215,30 @@ def test_clear_stops_radio():
     fb.clear()
     assert not fb.active
     assert fb.peek() is None
+
+
+async def test_a_chosen_show_outranks_automation_until_it_is_released():
+    fb = _fallback()
+    automation = [Resolved("https://s3/one.mp4", "queued clip")]
+    fb.set_external(automation)
+    assert _title(fb) == "queued clip"
+
+    await fb.set_series("breaking", 1, 1)
+    assert "Breaking Bad" in _title(fb)
+    # Automation keeps refreshing underneath and must not take the air back.
+    fb.set_external(automation)
+    assert "Breaking Bad" in _title(fb)
+    assert fb.queue_labels()[0].startswith("Breaking Bad")
+
+    fb.clear()  # .show off
+    assert _title(fb) == "queued clip"
+
+
+def test_radio_command_outranks_automation_until_it_is_released():
+    fb = _fallback()
+    fb.set_external([Resolved("https://s3/one.mp3", "queued song")])
+    fb.set_radio("https://radio.h4ks.com/radio")
+    assert _title(fb) == "📻 radio.h4ks.com"
+
+    fb.clear()  # .radio off
+    assert _title(fb) == "queued song"
