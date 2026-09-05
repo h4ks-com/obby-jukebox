@@ -66,6 +66,12 @@ fallback-only resource list with authenticated `PUT /fallback`; this never
 enters the human request queue. Human and admin queue requests remain
 authoritative and interrupt fallback immediately.
 
+The TV page uses a native `<video>` element. Set `WEB_STREAM_URL` to a
+browser-compatible WHEP endpoint (for example,
+`https://live.t3ks.com/livegames/whep`) to make a MediaMTX live source
+playable without embedding another application. The same jukebox publisher
+continues to restream the selected programme to the Obby `$tv` channel.
+
 ## Develop
 
 ```sh

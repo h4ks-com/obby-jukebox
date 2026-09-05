@@ -48,5 +48,7 @@ class Settings(BaseSettings):
     http_bind: str = "0.0.0.0"
     http_port: int = 8080
     api_key: str = ""  # blank → API is unauthenticated (gate at the edge instead)
+    # Browser-compatible WHEP source for the TV player, such as a MediaMTX path.
+    web_stream_url: str = ""
 
     log_level: str = "info"

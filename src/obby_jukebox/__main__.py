@@ -91,6 +91,7 @@ async def _run() -> None:
             live["publisher"].position() if live["publisher"] is not None else None
         ),
         api_key=settings.api_key,
+        stream_url=settings.web_stream_url,
     )
     server = uvicorn.Server(
         uvicorn.Config(

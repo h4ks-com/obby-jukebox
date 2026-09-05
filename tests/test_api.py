@@ -82,7 +82,10 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
         )
     )
 
-    assert client.get("/").status_code == 200
+    page = client.get("/")
+    assert page.status_code == 200
+    assert '<video id="video"' in page.text
+    assert "<iframe" not in page.text
     assert client.get("/tv").status_code == 200
     state = client.get("/tv/state").json()
     assert state["now"] is None

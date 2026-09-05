@@ -62,6 +62,7 @@ class TvState(BaseModel):
     position: float | None
     fallback: str | None
     queue: list[ItemOut]
+    stream_url: str | None
 
 
 class FallbackUpdate(BaseModel):
@@ -81,6 +82,7 @@ def create_app(
     fallback: FallbackShow | None = None,
     position: Callable[[], float | None] = lambda: None,
     api_key: str = "",
+    stream_url: str = "",
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
 
@@ -131,6 +133,7 @@ def create_app(
             position=position(),
             fallback=fallback.status() if fallback else None,
             queue=[_out(item) for item in playlist.upcoming()],
+            stream_url=stream_url or None,
         )
 
     @app.get("/", include_in_schema=False)
