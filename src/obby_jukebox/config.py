@@ -51,5 +51,6 @@ class Settings(BaseSettings):
     # Browser-compatible WHEP source for the TV player, such as a MediaMTX path.
     web_stream_url: str = ""
     web_stream_title: str = "livegames"
+    web_stream_kind: str = "audio"
 
     log_level: str = "info"

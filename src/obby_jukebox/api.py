@@ -64,6 +64,7 @@ class TvState(BaseModel):
     queue: list[ItemOut]
     stream_url: str | None
     stream_title: str | None
+    stream_kind: str | None
     fallback_queue: list[str]
 
 
@@ -86,6 +87,7 @@ def create_app(
     api_key: str = "",
     stream_url: str = "",
     stream_title: str = "livegames",
+    stream_kind: str = "audio",
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
 
@@ -143,6 +145,7 @@ def create_app(
             queue=[_out(item) for item in playlist.upcoming()],
             stream_url=stream_url or None,
             stream_title=browser_title,
+            stream_kind=stream_kind if stream_url else None,
             fallback_queue=fallback.queue_labels() if fallback else [],
         )
 

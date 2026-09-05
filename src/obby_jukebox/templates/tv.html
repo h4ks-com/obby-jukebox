@@ -26,7 +26,8 @@
     .label { border-left: 2px solid var(--blue); color: var(--mid); font: .72rem 'Courier New', monospace;
       letter-spacing: .15em; margin: 2.2rem 0 1rem; padding-left: .7rem; text-transform: uppercase; }
     .stage { background: #080a10; border: 1px solid var(--border); }
-    video { background: #080a10; display: block; min-height: 320px; width: 100%; }
+    video, audio { background: #080a10; display: block; min-height: 320px; width: 100%; }
+    audio { min-height: 48px; }
     .stage-bar { align-items: center; background: var(--panel); border-top: 2px solid var(--orange);
       display: flex; gap: 1rem; justify-content: space-between; padding: .7rem 1rem; }
     .live { color: var(--orange); font: bold .78rem 'Courier New', monospace; letter-spacing: .12em; }
@@ -59,7 +60,8 @@
     </header>
     <div class="label">on air</div>
     <section class="stage">
-      <video id="video" controls autoplay playsinline></video>
+      <video id="video" controls autoplay playsinline hidden></video>
+      <audio id="audio" controls autoplay hidden></audio>
       <div class="stage-bar"><span id="status" class="offline">connecting…</span>
         <span id="source" class="muted">waiting for a browser stream</span></div>
     </section>
@@ -78,6 +80,7 @@
   </div>
   <script>
     const video = document.getElementById('video');
+    const audio = document.getElementById('audio');
     const status = document.getElementById('status');
     const source = document.getElementById('source');
     const now = document.getElementById('now');
@@ -118,6 +121,18 @@
       await pc.setRemoteDescription({type: 'answer', sdp: await response.text()});
     }
 
+    function playAudio(url) {
+      audio.src = url;
+      audio.hidden = false;
+      video.hidden = true;
+      audio.play().catch(() => {
+        status.textContent = 'click play to listen'; status.className = 'offline';
+      });
+      audio.addEventListener('playing', () => {
+        status.textContent = '● LIVE'; status.className = 'live';
+      }, {once: true});
+    }
+
     async function poll() {
       try {
         const response = await fetch('/tv/state', {cache: 'no-store'});
@@ -128,8 +143,11 @@
         renderList(humanQueue, data.queue.map((item) => item.title || item.url),
           'empty — fallback can play');
         renderList(fallbackQueue, data.fallback_queue, 'none configured');
-        source.textContent = data.stream_url ? 'direct WebRTC/WHEP source' : 'no browser source configured';
-        if (data.stream_url && !reader) await playWhep(data.stream_url);
+        source.textContent = data.stream_url
+          ? `direct ${data.stream_kind === 'audio' ? 'audio' : 'WebRTC/WHEP'} source`
+          : 'no browser source configured';
+        if (data.stream_url && data.stream_kind === 'audio' && !audio.src) playAudio(data.stream_url);
+        if (data.stream_url && data.stream_kind !== 'audio' && !reader) await playWhep(data.stream_url);
       } catch (error) {
         status.textContent = 'stream unavailable'; status.className = 'offline';
       }
