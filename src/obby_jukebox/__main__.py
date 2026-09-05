@@ -61,6 +61,8 @@ async def _run() -> None:
         max_height=settings.video_height,
     )
     fallback = FallbackShow(jellyfin)
+    if settings.radio_url and not settings.fallback_series:
+        fallback.set_radio(settings.radio_url)
     search_cache = SearchCache()
     admins = {
         a.strip().casefold() for a in settings.admin_accounts.split(",") if a.strip()
