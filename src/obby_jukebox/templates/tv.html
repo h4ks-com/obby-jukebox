@@ -149,6 +149,7 @@
             pc.addTransceiver('audio', {direction: 'recvonly'}); pc.addTransceiver('video', {direction: 'recvonly'});
             pc.ontrack = (event) => { if (event.streams[0]) video.srcObject = event.streams[0]; status.textContent = '● LIVE'; status.className = 'live'; video.play().catch(() => {}); };
             pc.onicecandidate = (event) => { if (event.candidate) sendSignal(socket, {type: 'ice', cand: event.candidate.candidate, mid: event.candidate.sdpMid, mlineidx: event.candidate.sdpMLineIndex}); };
+            pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') viewer?.close(); };
             await pc.setLocalDescription(await pc.createOffer()); sendSignal(socket, {type: 'offer', sdp: pc.localDescription.sdp});
           } else if (signal.type === 'answer' && pc) {
             await pc.setRemoteDescription({type: 'answer', sdp: signal.sdp});
@@ -156,6 +157,13 @@
             // arrive while setRemoteDescription is still pending and can only be
             // added once it lands.
             while (earlyIce.length) await pc.addIceCandidate(earlyIce.shift());
+          } else if (signal.type === 'offer' && pc) {
+            // The SFU renegotiates whenever the streamer's tracks change, which
+            // is how a restarted jukebox reaches viewers who never left.
+            await pc.setRemoteDescription({type: 'offer', sdp: signal.sdp});
+            while (earlyIce.length) await pc.addIceCandidate(earlyIce.shift());
+            await pc.setLocalDescription(await pc.createAnswer());
+            sendSignal(socket, {type: 'answer', sdp: pc.localDescription.sdp});
           } else if (signal.type === 'ice' && pc) {
             const candidate = {candidate: signal.cand, sdpMid: signal.mid, sdpMLineIndex: signal.mlineidx};
             if (pc.remoteDescription) await pc.addIceCandidate(candidate); else earlyIce.push(candidate);
@@ -164,6 +172,15 @@
       };
       socket.onerror = () => { status.textContent = 'stream unavailable'; status.className = 'offline'; };
       socket.onclose = () => { if (viewer?.socket === socket) viewer = null; status.textContent = 'reconnecting…'; status.className = 'offline'; setTimeout(connectTv, 3000); };
+    }
+
+    // A jukebox restart can leave the SFU peer up with nothing flowing through
+    // it, which looks exactly like a frozen picture until we re-handshake.
+    let lastFrameTime = 0; let stalledPolls = 0;
+    function watchForStall() {
+      if (!video.srcObject) return;
+      if (video.currentTime !== lastFrameTime) { lastFrameTime = video.currentTime; stalledPolls = 0; return; }
+      if (++stalledPolls >= 4) { stalledPolls = 0; viewer?.close(); }
     }
 
     async function poll() {
@@ -177,9 +194,10 @@
           'empty — fallback can play');
         renderList(fallbackQueue, data.fallback_queue, 'none configured');
         source.textContent = 'shared $tv channel · audio + video';
+        watchForStall();
         await connectTv();
       } catch (error) {
-        status.textContent = 'stream unavailable'; status.className = 'offline';
+        if (!video.srcObject) { status.textContent = 'stream unavailable'; status.className = 'offline'; }
       }
       setTimeout(poll, 5000);
     }
