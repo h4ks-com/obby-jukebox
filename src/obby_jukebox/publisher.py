@@ -99,6 +99,7 @@ class Publisher:
         self._role = ""
         self._play_started = 0.0  # monotonic when the current source began, 0 if idle
         self._play_offset = 0.0  # seek offset the current source started from
+        self._current: Resolved | None = None
         # Fired when playback switches to a new item, so the channel can announce it.
         self.on_track_change: Callable[[], None] | None = None
 
@@ -118,6 +119,10 @@ class Publisher:
         if not self._play_started:
             return None
         return self._play_offset + (time.monotonic() - self._play_started)
+
+    def current(self) -> Resolved | None:
+        """The source currently owned by this publisher, if it is streaming."""
+        return self._current
 
     def change_visualizer(self, style: int | None = None) -> str | None:
         """Cycle (None) or set the live audio animation; None when none is on."""
@@ -344,6 +349,7 @@ class Publisher:
 
     def _set_idle(self) -> None:
         self._play_started = 0.0
+        self._current = None
         if self._audio is not None:
             self._audio.clear_source()
         if self._video is not None:
@@ -471,6 +477,7 @@ class Publisher:
                 source, ffmpeg = opened
                 at = f" @ {offset:.0f}s" if offset else ""
                 logger.info("now playing: %s%s", resolved.title, at)
+                self._current = resolved
                 try:
                     if self._audio is not None and source.audio is not None:
                         self._audio.set_source(source.audio)

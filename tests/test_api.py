@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from obby_jukebox.api import create_app
 from obby_jukebox.fallback import FallbackShow
-from obby_jukebox.player import Playlist
+from obby_jukebox.player import Playlist, Resolved
 
 
 @pytest.fixture
@@ -123,8 +123,9 @@ def test_web_stream_is_authoritative_for_now_showing():
             MagicMock(),
             MagicMock(),
             fallback=fallback,
-            stream_url="https://live.example/whep",
-            stream_title="livegames",
+            current=lambda: Resolved(
+                "https://live.example/stream", "livegames", live=True
+            ),
         )
     )
 

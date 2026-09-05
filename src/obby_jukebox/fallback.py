@@ -117,7 +117,9 @@ class FallbackShow:
         if self._external:
             return self._external[self._external_cursor % len(self._external)]
         if self._radio_url:
-            return Resolved(self._radio_url, self._radio_label(), live=True)
+            return Resolved(
+                self._radio_url, self._radio_label(), live=True, audio_only=True
+            )
         if not self._episodes:
             return None
         ep = self._episodes[self._cursor]

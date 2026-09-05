@@ -38,6 +38,7 @@ class Resolved:
     seek_url: Callable[[float], str] | None = None
     # A live stream (e.g. radio) has no fixed length or seekable position.
     live: bool = False
+    audio_only: bool = False
 
 
 @dataclass
