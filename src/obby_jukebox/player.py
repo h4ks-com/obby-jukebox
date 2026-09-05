@@ -117,6 +117,11 @@ def resolve(url: str, cookies: str = "") -> Resolved:
         # Bound network ops so a stalled fetch surfaces as a socket timeout
         # (OSError) the caller can skip, instead of wedging the player loop.
         "socket_timeout": 20,
+        # We ship no JavaScript runtime, so every client that has to solve
+        # YouTube's signature challenge offers no progressive format and yt-dlp
+        # falls through to one whose URLs the CDN answers with 403. The android
+        # client needs neither JS nor a PO token; it caps us at 360p.
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
     }
     with _cookiefile(cookies) as cookiefile:
         if cookiefile:
