@@ -26,8 +26,7 @@
     .label { border-left: 2px solid var(--blue); color: var(--mid); font: .72rem 'Courier New', monospace;
       letter-spacing: .15em; margin: 2.2rem 0 1rem; padding-left: .7rem; text-transform: uppercase; }
     .stage { background: #080a10; border: 1px solid var(--border); }
-    video, audio { background: #080a10; display: block; min-height: 320px; width: 100%; }
-    audio { min-height: 48px; }
+    video { background: #080a10; display: block; min-height: 320px; width: 100%; }
     .stage-bar { align-items: center; background: var(--panel); border-top: 2px solid var(--orange);
       display: flex; gap: 1rem; justify-content: space-between; padding: .7rem 1rem; }
     .live { color: var(--orange); font: bold .78rem 'Courier New', monospace; letter-spacing: .12em; }
@@ -60,8 +59,7 @@
     </header>
     <div class="label">on air</div>
     <section class="stage">
-      <video id="video" controls autoplay playsinline hidden></video>
-      <audio id="audio" controls autoplay hidden></audio>
+      <video id="video" controls autoplay playsinline></video>
       <div class="stage-bar"><span id="status" class="offline">connecting…</span>
         <span id="source" class="muted">waiting for a browser stream</span></div>
     </section>
@@ -80,14 +78,13 @@
   </div>
   <script>
     const video = document.getElementById('video');
-    const audio = document.getElementById('audio');
     const status = document.getElementById('status');
     const source = document.getElementById('source');
     const now = document.getElementById('now');
     const fallback = document.getElementById('fallback');
     const humanQueue = document.getElementById('human-queue');
     const fallbackQueue = document.getElementById('fallback-queue');
-    let reader;
+    let viewer;
 
     function renderList(element, entries, empty) {
       element.replaceChildren();
@@ -99,38 +96,54 @@
       });
     }
 
-    async function playWhep(url) {
-      if (reader) reader.close();
-      const pc = new RTCPeerConnection();
-      reader = {close: () => pc.close()};
-      pc.addTransceiver('video', {direction: 'recvonly'});
-      pc.addTransceiver('audio', {direction: 'recvonly'});
-      pc.ontrack = (event) => { video.srcObject = event.streams[0];
-        status.textContent = '● LIVE'; status.className = 'live'; };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await new Promise((resolve) => {
-        if (pc.iceGatheringState === 'complete') resolve();
-        else pc.addEventListener('icegatheringstatechange', () => {
-          if (pc.iceGatheringState === 'complete') resolve();
-        });
-      });
-      const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/sdp'},
-        body: pc.localDescription.sdp});
-      if (!response.ok) throw new Error(`WHEP ${response.status}`);
-      await pc.setRemoteDescription({type: 'answer', sdp: await response.text()});
+    // The page is a viewer of the same $tv WebRTC channel as Obby. IRC is used
+    // only for signaling; the player receives one continuous audio+video track
+    // from the SFU, including the jukebox visualizer for radio items.
+    const channel = '$tv';
+    const rtcTag = '+obsidianirc/rtc';
+    const ircUrl = `wss://${location.hostname === 'tv.h4ks.com' ? 'irc.h4ks.com' : location.hostname}:443`;
+    function unescapeTag(value) { return value.replace(/\\([:s\\rn])/g, (_, c) => { if (c === ':') return ';'; if (c === 's') return ' '; if (c === 'r') return '\r'; if (c === 'n') return '\n'; return '\\'; }); }
+    function escapeTag(value) { return value.replace(/\\/g, '\\\\').replace(/;/g, '\\:').replace(/ /g, '\\s').replace(/\r/g, '\\r').replace(/\n/g, '\\n'); }
+    function tagMessages(line) {
+      if (!line.startsWith('@')) return null;
+      const end = line.indexOf(' '); if (end < 0) return null;
+      const tags = {};
+      line.slice(1, end).split(';').forEach((part) => { const [key, value = null] = part.split('=', 2); tags[key] = value === null ? null : unescapeTag(value); });
+      return tags;
     }
-
-    function playAudio(url) {
-      audio.src = url;
-      audio.hidden = false;
-      video.hidden = true;
-      audio.play().catch(() => {
-        status.textContent = 'click play to listen'; status.className = 'offline';
-      });
-      audio.addEventListener('playing', () => {
-        status.textContent = '● LIVE'; status.className = 'live';
-      }, {once: true});
+    function sendSignal(socket, signal) {
+      const raw = JSON.stringify({...signal, channel});
+      const pieces = [];
+      if (raw.length < 7000 || !signal.sdp) pieces.push(signal);
+      else { const id = crypto.randomUUID().slice(0, 12); const size = 3000; for (let i = 0; i < signal.sdp.length; i += size) pieces.push({...signal, sdp: signal.sdp.slice(i, i + size), id, seq: pieces.length, total: Math.ceil(signal.sdp.length / size)}); }
+      pieces.forEach((part) => socket.send(`@${rtcTag}=${escapeTag(JSON.stringify(part))} TAGMSG ${channel}\r\n`));
+    }
+    async function connectTv() {
+      if (viewer) return;
+      const socket = new WebSocket(ircUrl);
+      const nick = `tv-${crypto.randomUUID().slice(0, 8)}`;
+      const pending = new Map(); let pc; let joined = false;
+      viewer = {socket, close: () => { socket.close(); pc?.close(); viewer = null; }};
+      socket.onopen = () => { socket.send('CAP LS 302\r\n'); socket.send(`NICK ${nick}\r\nUSER ${nick} 0 * :h4ks tv\r\n`); };
+      socket.onmessage = async (event) => {
+        const text = String(event.data); for (const line of text.split(/\r?\n/)) {
+          if (!line) continue; if (line.startsWith('PING')) { socket.send(`PONG ${line.slice(5)}\r\n`); continue; }
+          if (line.includes(' 001 ')) { socket.send('CAP END\r\n'); socket.send(`JOIN ${channel}\r\n`); continue; }
+          const tags = tagMessages(line); const raw = tags?.[rtcTag]; if (!raw) continue;
+          let signal; try { signal = JSON.parse(raw); } catch { continue; }
+          if (signal.total) { const key = signal.id; const entry = pending.get(key) ?? {parts: [], total: signal.total, base: signal}; entry.parts[signal.seq] = signal.sdp; pending.set(key, entry); if (entry.parts.filter(Boolean).length < entry.total) continue; signal = {...entry.base, sdp: entry.parts.join('')}; pending.delete(key); }
+          if (signal.type === 'joined' && !joined) {
+            joined = true; pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}, ...(signal.turn ? [{urls: signal.turn.urls, username: signal.turn.username, credential: signal.turn.password}] : [])]});
+            pc.addTransceiver('audio', {direction: 'recvonly'}); pc.addTransceiver('video', {direction: 'recvonly'});
+            pc.ontrack = (event) => { if (event.streams[0]) video.srcObject = event.streams[0]; status.textContent = '● LIVE'; status.className = 'live'; video.play().catch(() => {}); };
+            pc.onicecandidate = (event) => { if (event.candidate) sendSignal(socket, {type: 'ice', cand: event.candidate.candidate, mid: event.candidate.sdpMid, mlineidx: event.candidate.sdpMLineIndex}); };
+            await pc.setLocalDescription(await pc.createOffer()); sendSignal(socket, {type: 'offer', sdp: pc.localDescription.sdp});
+          } else if (signal.type === 'answer' && pc) await pc.setRemoteDescription({type: 'answer', sdp: signal.sdp});
+          else if (signal.type === 'ice' && pc && pc.remoteDescription) await pc.addIceCandidate({candidate: signal.cand, sdpMid: signal.mid, sdpMLineIndex: signal.mlineidx});
+        }
+      };
+      socket.onerror = () => { status.textContent = 'stream unavailable'; status.className = 'offline'; };
+      socket.onclose = () => { if (viewer?.socket === socket) viewer = null; status.textContent = 'reconnecting…'; status.className = 'offline'; setTimeout(connectTv, 3000); };
     }
 
     async function poll() {
@@ -143,11 +156,8 @@
         renderList(humanQueue, data.queue.map((item) => item.title || item.url),
           'empty — fallback can play');
         renderList(fallbackQueue, data.fallback_queue, 'none configured');
-        source.textContent = data.stream_url
-          ? `direct ${data.stream_kind === 'audio' ? 'audio' : 'WebRTC/WHEP'} source`
-          : 'no browser source configured';
-        if (data.stream_url && data.stream_kind === 'audio' && !audio.src) playAudio(data.stream_url);
-        if (data.stream_url && data.stream_kind !== 'audio' && !reader) await playWhep(data.stream_url);
+        source.textContent = 'shared $tv channel · audio + video';
+        await connectTv();
       } catch (error) {
         status.textContent = 'stream unavailable'; status.className = 'offline';
       }
