@@ -45,6 +45,9 @@ class FallbackResource(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     title: str = Field(min_length=1, max_length=240)
     live: bool = False
+    # A stream that never ends holds the channel forever unless it is given a
+    # slot; omit it for one that should play out in full.
+    max_seconds: float | None = Field(default=None, gt=0, le=86400)
 
     @field_validator("url")
     @classmethod
@@ -69,6 +72,7 @@ class FallbackResourceOut(BaseModel):
     url: str
     title: str
     live: bool
+    max_seconds: float | None = None
 
 
 class TvState(BaseModel):
@@ -91,8 +95,10 @@ def _out(item: Item) -> ItemOut:
     return ItemOut(id=item.id, url=item.url, title=item.title, duration=item.duration)
 
 
-def _programme(resources: list[Resolved]) -> list[tuple[str, str, bool]]:
-    return [(r.media_url, r.title, r.live) for r in resources]
+def _programme(
+    resources: list[Resolved],
+) -> list[tuple[str, str, bool, float | None]]:
+    return [(r.media_url, r.title, r.live, r.max_seconds) for r in resources]
 
 
 def create_app(
@@ -176,7 +182,13 @@ def create_app(
         if fallback is None:
             raise HTTPException(status_code=503, detail="fallback unavailable")
         resources = [
-            Resolved(item.url, item.title, live=item.is_live) for item in req.resources
+            Resolved(
+                item.url,
+                item.title,
+                live=item.is_live,
+                max_seconds=item.max_seconds,
+            )
+            for item in req.resources
         ]
         # A controller polls with the same programme over and over; re-airing it
         # every time would cut the stream on every poll.
@@ -196,7 +208,12 @@ def create_app(
         if fallback is None:
             return []
         return [
-            FallbackResourceOut(url=item.media_url, title=item.title, live=item.live)
+            FallbackResourceOut(
+                url=item.media_url,
+                title=item.title,
+                live=item.live,
+                max_seconds=item.max_seconds,
+            )
             for item in fallback.external()
         ]
 

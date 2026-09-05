@@ -124,7 +124,11 @@ def test_fallback_accepts_stream_protocols_and_marks_them_live():
         "/fallback",
         json={
             "resources": [
-                {"url": "rtsp://mediamtx:8554/livegames", "title": "livegames"},
+                {
+                    "url": "rtsp://mediamtx:8554/livegames",
+                    "title": "livegames",
+                    "max_seconds": 120,
+                },
                 {"url": "https://live.example/live/index.m3u8", "title": "hls"},
             ]
         },
@@ -132,19 +136,40 @@ def test_fallback_accepts_stream_protocols_and_marks_them_live():
     assert accepted.status_code == 200
     resources = fallback.set_external.call_args.args[0]
     assert [r.live for r in resources] == [True, False]
+    assert [r.max_seconds for r in resources] == [120, None]
 
     fallback.external.return_value = resources
     repeat = client.put(
         "/fallback",
         json={
             "resources": [
-                {"url": "rtsp://mediamtx:8554/livegames", "title": "livegames"},
+                {
+                    "url": "rtsp://mediamtx:8554/livegames",
+                    "title": "livegames",
+                    "max_seconds": 120,
+                },
                 {"url": "https://live.example/live/index.m3u8", "title": "hls"},
             ]
         },
     )
     assert repeat.json()["status"] == "unchanged"
     fallback.set_external.assert_called_once()
+
+    # A different slot length is a different programme, so it goes on air.
+    relimited = client.put(
+        "/fallback",
+        json={
+            "resources": [
+                {
+                    "url": "rtsp://mediamtx:8554/livegames",
+                    "title": "livegames",
+                    "max_seconds": 300,
+                },
+                {"url": "https://live.example/live/index.m3u8", "title": "hls"},
+            ]
+        },
+    )
+    assert relimited.json()["status"] == "updated"
 
     rejected = client.put(
         "/fallback",

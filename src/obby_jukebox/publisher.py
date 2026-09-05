@@ -501,7 +501,10 @@ class Publisher:
                         with contextlib.suppress(RuntimeError):
                             self.on_track_change()
                     reason = await self._await_end(
-                        source, interruptible=interruptible, live=resolved.live
+                        source,
+                        interruptible=interruptible,
+                        live=resolved.live,
+                        max_seconds=resolved.max_seconds,
                     )
                 finally:
                     _stop_player(source)
@@ -528,10 +531,19 @@ class Publisher:
                     os.unlink(buffer_path)
 
     async def _await_end(
-        self, source: MediaPlayer, *, interruptible: bool, live: bool = False
+        self,
+        source: MediaPlayer,
+        *,
+        interruptible: bool,
+        live: bool = False,
+        max_seconds: float | None = None,
     ) -> str:
         track = source.video or source.audio
+        started = time.monotonic()
         while track is not None and track.readyState == "live":
+            if max_seconds is not None and time.monotonic() - started >= max_seconds:
+                logger.info("%.0fs slot is up; moving on", max_seconds)
+                return "slot over"
             if self._seek.is_set():
                 self._seek.clear()
                 if not live:  # a live stream has no position to seek to; ignore it

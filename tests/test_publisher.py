@@ -182,6 +182,23 @@ async def test_await_end_ignores_seek_for_live_source():
     assert await pub._await_end(source, interruptible=False, live=True) == "skip"
 
 
+async def test_await_end_gives_up_the_channel_when_the_slot_is_up():
+    # An endless stream (livegames) only moves on because its slot expires.
+    pub = _publisher()
+    source = cast(MediaPlayer, _FakeSource())
+    reason = await pub._await_end(
+        source, interruptible=False, live=True, max_seconds=0.01
+    )
+    assert reason == "slot over"
+
+
+async def test_await_end_plays_an_unlimited_source_to_its_end():
+    pub = _publisher()
+    source = cast(MediaPlayer, _FakeSource())
+    pub._skip.set()
+    assert await pub._await_end(source, interruptible=False, live=True) == "skip"
+
+
 async def test_await_end_returns_seek_for_normal_source():
     pub = _publisher()
     source = cast(MediaPlayer, _FakeSource())

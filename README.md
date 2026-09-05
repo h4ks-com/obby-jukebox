@@ -67,7 +67,10 @@ enters the human request queue. Human and admin queue requests remain
 authoritative and interrupt fallback immediately. A fallback resource is any
 URL ffmpeg can open — an HTTP(S) file or HLS playlist, or `rtsp://`, `rtmp://`,
 `srt://` straight off MediaMTX. Stream protocols always count as live, so the
-programme never tries to seek or buffer them.
+programme never tries to seek or buffer them. Give a resource `max_seconds` to
+cap its slot: a stream that never ends on its own holds the channel until the
+slot expires, and one without a cap plays out in full. Either way the programme
+moves to the next resource when a stream ends or dies.
 
 The TV page uses a native media element for the source currently owned by the
 jukebox publisher. It follows the same programme clock as the Obby `$tv`

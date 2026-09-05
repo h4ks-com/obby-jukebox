@@ -39,6 +39,9 @@ class Resolved:
     # A live stream (e.g. radio) has no fixed length or seekable position.
     live: bool = False
     audio_only: bool = False
+    # Give up the channel after this long. A stream that never ends on its own
+    # would otherwise hold the air forever; None means play it to its end.
+    max_seconds: float | None = None
 
 
 @dataclass
