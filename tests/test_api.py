@@ -107,3 +107,26 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
     wake.assert_called_once()
     queue = client.get("/queue", headers={"X-API-Key": "secret"}).json()
     assert queue["upcoming"] == []
+
+
+def test_web_stream_is_authoritative_for_now_showing():
+    fallback = MagicMock(spec=FallbackShow)
+    fallback.active = True
+    fallback.now_label.return_value = "Jukebox fallback"
+    fallback.status.return_value = "fallback: Jukebox fallback"
+    fallback.queue_labels.return_value = ["Jukebox fallback"]
+    client = TestClient(
+        create_app(
+            Playlist(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            fallback=fallback,
+            stream_url="https://live.example/whep",
+            stream_title="livegames",
+        )
+    )
+
+    state = client.get("/tv/state").json()
+    assert state["now"]["title"] == "livegames"
+    assert state["fallback_queue"] == ["Jukebox fallback"]

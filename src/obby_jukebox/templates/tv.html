@@ -71,7 +71,7 @@
           <ol id="fallback-queue"><li class="muted">none configured</li></ol></div>
       </div></section>
       <section><div class="label">the room</div><div class="panel"><p class="muted">
-        <strong id="now">nothing on air</strong><br><span id="fallback">waiting for a fallback</span></p>
+        <strong id="now">nothing on air</strong><br><span id="fallback">fallback schedule: waiting for a fallback</span></p>
         <p class="muted">Community television assembled from lives, games, videos, and music.</p>
         <a href="https://chat.h4ks.com/?channel=%24tv">join the $tv room ↗</a></div></section>
     </div>
@@ -123,7 +123,8 @@
         const response = await fetch('/tv/state', {cache: 'no-store'});
         const data = await response.json();
         now.textContent = data.now?.title || 'nothing on air';
-        fallback.textContent = data.fallback || 'waiting for a fallback';
+        fallback.textContent = data.fallback
+          ? `fallback schedule: ${data.fallback}` : 'fallback schedule: waiting for a fallback';
         renderList(humanQueue, data.queue.map((item) => item.title || item.url),
           'empty — fallback can play');
         renderList(fallbackQueue, data.fallback_queue, 'none configured');

@@ -126,14 +126,14 @@ def create_app(
         browser_title = stream_title if stream_url else None
         return TvState(
             now=(
-                _out(cur)
-                if cur
+                ItemOut(id="web-stream", url=stream_url, title=browser_title)
+                if browser_title
                 else (
-                    ItemOut(id="fallback", url="", title=fallback_title)
-                    if fallback_title
+                    _out(cur)
+                    if cur
                     else (
-                        ItemOut(id="web-stream", url=stream_url, title=browser_title)
-                        if browser_title
+                        ItemOut(id="fallback", url="", title=fallback_title)
+                        if fallback_title
                         else None
                     )
                 )
