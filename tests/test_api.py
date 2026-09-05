@@ -115,6 +115,7 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
 
 def test_fallback_accepts_stream_protocols_and_marks_them_live():
     fallback = MagicMock(spec=FallbackShow)
+    fallback.external.return_value = []
     client = TestClient(
         create_app(Playlist(), MagicMock(), MagicMock(), MagicMock(), fallback=fallback)
     )
@@ -131,6 +132,19 @@ def test_fallback_accepts_stream_protocols_and_marks_them_live():
     assert accepted.status_code == 200
     resources = fallback.set_external.call_args.args[0]
     assert [r.live for r in resources] == [True, False]
+
+    fallback.external.return_value = resources
+    repeat = client.put(
+        "/fallback",
+        json={
+            "resources": [
+                {"url": "rtsp://mediamtx:8554/livegames", "title": "livegames"},
+                {"url": "https://live.example/live/index.m3u8", "title": "hls"},
+            ]
+        },
+    )
+    assert repeat.json()["status"] == "unchanged"
+    fallback.set_external.assert_called_once()
 
     rejected = client.put(
         "/fallback",

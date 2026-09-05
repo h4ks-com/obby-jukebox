@@ -91,6 +91,10 @@ def _out(item: Item) -> ItemOut:
     return ItemOut(id=item.id, url=item.url, title=item.title, duration=item.duration)
 
 
+def _programme(resources: list[Resolved]) -> list[tuple[str, str, bool]]:
+    return [(r.media_url, r.title, r.live) for r in resources]
+
+
 def create_app(
     playlist: Playlist,
     wake: Callable[[], None],
@@ -171,15 +175,17 @@ def create_app(
     def set_fallback(req: FallbackRequest) -> FallbackUpdate:
         if fallback is None:
             raise HTTPException(status_code=503, detail="fallback unavailable")
-        fallback.set_external(
-            [
-                Resolved(item.url, item.title, live=item.is_live)
-                for item in req.resources
-            ]
-        )
+        resources = [
+            Resolved(item.url, item.title, live=item.is_live) for item in req.resources
+        ]
+        # A controller polls with the same programme over and over; re-airing it
+        # every time would cut the stream on every poll.
+        if _programme(fallback.external()) == _programme(resources):
+            return FallbackUpdate(status="unchanged", count=len(resources))
+        fallback.set_external(resources)
         # A new programme goes on air now; a human request still outranks it.
         reload_fallback()
-        return FallbackUpdate(status="updated", count=len(req.resources))
+        return FallbackUpdate(status="updated", count=len(resources))
 
     @app.get(
         "/fallback",
