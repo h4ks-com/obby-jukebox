@@ -1,6 +1,7 @@
 import array
 import asyncio
 import math
+from typing import cast
 
 import av
 from aiortc import MediaStreamTrack
@@ -16,6 +17,24 @@ class _StalledSource(MediaStreamTrack):
     async def recv(self) -> av.VideoFrame:
         await asyncio.sleep(3600)
         raise MediaStreamError
+
+
+class _CountingSource(MediaStreamTrack):
+    """A source that hands out frames every `interval` seconds and counts them."""
+
+    kind = "video"
+
+    def __init__(self, width: int, height: int, interval: float = 1 / 60) -> None:
+        super().__init__()
+        self._width = width
+        self._height = height
+        self._interval = interval
+        self.served = 0
+
+    async def recv(self) -> av.VideoFrame:
+        await asyncio.sleep(self._interval)
+        self.served += 1
+        return av.VideoFrame(width=self._width, height=self._height, format="yuv420p")
 
 
 def _tone_frame(amplitude: int, samples: int = 960) -> av.AudioFrame:
@@ -149,4 +168,27 @@ async def test_video_track_emits_fallback_without_source():
     assert (frame.width, frame.height) == (320, 240)
     assert frame.pts == 0
     nxt = await track.recv()
-    assert nxt.pts == 3000  # 90000 / 30
+    # Timestamps follow the wall clock, so an idle frame lands about one frame
+    # interval on rather than exactly 90000/30 ticks.
+    assert nxt.pts is not None
+    assert 1500 < nxt.pts < 6000
+
+
+async def test_video_track_drops_a_source_running_faster_than_the_channel():
+    # A 60fps source must not spend the encoder's budget on frames we have no
+    # room to send: half of them are dropped so the rest keep their detail.
+    track = JukeboxVideoTrack(320, 240, fps=30)
+    track.set_source(cast(MediaStreamTrack, _CountingSource(320, 240)))
+    for _ in range(6):
+        await track.recv()
+    source = cast(_CountingSource, track._source)
+    assert source.served >= 10, f"only pulled {source.served} frames from a 2x source"
+
+
+async def test_video_track_keeps_every_frame_of_a_slow_source():
+    track = JukeboxVideoTrack(320, 240, fps=30)
+    track.set_source(cast(MediaStreamTrack, _CountingSource(320, 240, interval=0.05)))
+    for _ in range(4):
+        await track.recv()
+    source = cast(_CountingSource, track._source)
+    assert source.served == 4

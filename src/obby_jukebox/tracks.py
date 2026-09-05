@@ -150,9 +150,10 @@ class JukeboxVideoTrack(MediaStreamTrack):
         self._source: MediaStreamTrack | None = None
         self._width = width
         self._height = height
-        self._step = _VIDEO_CLOCK // fps
         self._frame_time = 1 / fps
-        self._pts = 0
+        self._pts = -1  # nothing sent yet, so the first frame may land on zero
+        self._started = 0.0
+        self._due = 0.0
         self._graph: av.filter.Graph | None = None
         self._graph_in: av.filter.context.FilterContext | None = None
         self._graph_out: av.filter.context.FilterContext | None = None
@@ -204,29 +205,60 @@ class JukeboxVideoTrack(MediaStreamTrack):
         return VIS_NAMES[self._vis_style]
 
     async def recv(self) -> av.VideoFrame:
-        source = self._source
-        frame: av.VideoFrame | None = None
-        if source is not None:
-            try:
-                raw = await asyncio.wait_for(source.recv(), _SOURCE_RECV_TIMEOUT)
-            except TimeoutError:
-                raw = None
-            except MediaStreamError:
-                self._source = None
-                raw = None
-            if isinstance(raw, av.VideoFrame):
-                self.last_frame_at = time.monotonic()
-                frame = self._letterbox(raw)
-        if frame is None:
-            await asyncio.sleep(self._frame_time)
-            if self._visualize and self._meter is not None:
-                frame = self._render_visualizer(self._meter.level)
-            else:
-                frame = _frame_from_image(self._idle_image)
-        frame.pts = self._pts
+        frame = await self._paced_frame()
+        now = time.monotonic()
+        if self._started == 0.0:
+            self._started = now
+        # Timestamp against the wall clock rather than counting frames: a fixed
+        # step only tells the truth for a source running at exactly our fps, and
+        # a 60fps stream claimed 2.6x the media time it really had.
+        pts = int((now - self._started) * _VIDEO_CLOCK)
+        frame.pts = max(pts, self._pts + 1)
         frame.time_base = fractions.Fraction(1, _VIDEO_CLOCK)
-        self._pts += self._step
+        self._pts = frame.pts
         return frame
+
+    async def _paced_frame(self) -> av.VideoFrame:
+        """The freshest source frame that is actually due. A source faster than
+        our output rate is drained rather than forwarded, so the encoder spends
+        its whole bitrate on the frames we send instead of splitting it across
+        frames the channel has no room for."""
+        now = time.monotonic()
+        if self._due == 0.0:
+            self._due = now
+        frame: av.VideoFrame | None = None
+        while self._source is not None:
+            raw = await self._from_source()
+            if raw is None:
+                break
+            frame = raw
+            now = time.monotonic()
+            if now >= self._due:
+                break
+        if frame is not None:
+            self._due = max(now, self._due) + self._frame_time
+            return frame
+        await asyncio.sleep(self._frame_time)
+        self._due = time.monotonic() + self._frame_time
+        if self._visualize and self._meter is not None:
+            return self._render_visualizer(self._meter.level)
+        return _frame_from_image(self._idle_image)
+
+    async def _from_source(self) -> av.VideoFrame | None:
+        source = self._source
+        if source is None:
+            return None
+        try:
+            raw = await asyncio.wait_for(source.recv(), _SOURCE_RECV_TIMEOUT)
+        except TimeoutError:
+            return None
+        except MediaStreamError:
+            self._source = None
+            return None
+        if not isinstance(raw, av.VideoFrame):
+            return None
+        self.last_frame_at = time.monotonic()
+        return self._letterbox(raw)
 
     def _render_visualizer(self, level: float) -> av.VideoFrame:
         self._vis_tick += 1
