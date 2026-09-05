@@ -83,6 +83,10 @@ async def _run() -> None:
         if live["publisher"] is not None:
             live["publisher"].seek(seconds)
 
+    def reload_fallback() -> None:
+        if live["publisher"] is not None:
+            live["publisher"].reload_fallback()
+
     app = create_app(
         playlist,
         wake,
@@ -96,6 +100,7 @@ async def _run() -> None:
         current=lambda: (
             live["publisher"].current() if live["publisher"] is not None else None
         ),
+        reload_fallback=reload_fallback,
     )
     server = uvicorn.Server(
         uvicorn.Config(

@@ -100,6 +100,7 @@ def create_app(
     position: Callable[[], float | None] = lambda: None,
     api_key: str = "",
     current: Callable[[], Resolved | None] = lambda: None,
+    reload_fallback: Callable[[], None] = lambda: None,
 ) -> FastAPI:
     app = FastAPI(title="obby-jukebox", version="0.1.0")
 
@@ -176,7 +177,8 @@ def create_app(
                 for item in req.resources
             ]
         )
-        wake()
+        # A new programme goes on air now; a human request still outranks it.
+        reload_fallback()
         return FallbackUpdate(status="updated", count=len(req.resources))
 
     @app.get(

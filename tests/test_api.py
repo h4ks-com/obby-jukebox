@@ -72,6 +72,7 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
     fallback.external.return_value = []
     fallback.queue_labels.return_value = []
     wake = MagicMock()
+    reload_fallback = MagicMock()
     client = TestClient(
         create_app(
             pl,
@@ -80,6 +81,7 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
             MagicMock(),
             fallback=fallback,
             api_key="secret",
+            reload_fallback=reload_fallback,
         )
     )
 
@@ -105,7 +107,8 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
     )
     assert response.status_code == 200
     fallback.set_external.assert_called_once()
-    wake.assert_called_once()
+    reload_fallback.assert_called_once()
+    wake.assert_not_called()
     queue = client.get("/queue", headers={"X-API-Key": "secret"}).json()
     assert queue["upcoming"] == []
 
