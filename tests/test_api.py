@@ -90,6 +90,7 @@ def test_tv_page_and_fallback_automation_are_separate_from_queue():
     state = client.get("/tv/state").json()
     assert state["now"] is None
     assert state["fallback"] == "fallback: radio"
+    assert state["stream_title"] is None
 
     response = client.put(
         "/fallback",

@@ -50,5 +50,6 @@ class Settings(BaseSettings):
     api_key: str = ""  # blank → API is unauthenticated (gate at the edge instead)
     # Browser-compatible WHEP source for the TV player, such as a MediaMTX path.
     web_stream_url: str = ""
+    web_stream_title: str = "livegames"
 
     log_level: str = "info"
