@@ -117,8 +117,17 @@ def create_app(
     @app.get("/tv/state", response_model=TvState)
     def tv_state() -> TvState:
         cur = playlist.now
+        fallback_title = fallback.now_label() if fallback and fallback.active else None
         return TvState(
-            now=_out(cur) if cur else None,
+            now=(
+                _out(cur)
+                if cur
+                else (
+                    ItemOut(id="fallback", url="", title=fallback_title)
+                    if fallback_title
+                    else None
+                )
+            ),
             position=position(),
             fallback=fallback.status() if fallback else None,
             queue=[_out(item) for item in playlist.upcoming()],
