@@ -4,6 +4,7 @@ import math
 from typing import cast
 
 import av
+import pytest
 from aiortc import MediaStreamTrack
 from aiortc.mediastreams import MediaStreamError
 
@@ -172,6 +173,20 @@ async def test_video_track_emits_fallback_without_source():
     # interval on rather than exactly 90000/30 ticks.
     assert nxt.pts is not None
     assert 1500 < nxt.pts < 6000
+
+
+def test_frame_deadline_holds_a_steady_cadence():
+    # Folding each overshoot into the next interval silently cost a third of the
+    # frame rate, so a frame arriving late must not push the following one out.
+    track = JukeboxVideoTrack(320, 240, fps=30)
+    track._due = 100.0
+    track._next_due(100.02)
+    assert track._due == pytest.approx(100.0 + 1 / 30)
+    track._next_due(100.04)
+    assert track._due == pytest.approx(100.0 + 2 / 30)
+    # Falling far behind restarts the cadence rather than bursting to catch up.
+    track._next_due(200.0)
+    assert track._due == pytest.approx(200.0 + 1 / 30)
 
 
 async def test_video_track_drops_a_source_running_faster_than_the_channel():

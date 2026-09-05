@@ -236,13 +236,23 @@ class JukeboxVideoTrack(MediaStreamTrack):
             if now >= self._due:
                 break
         if frame is not None:
-            self._due = max(now, self._due) + self._frame_time
+            self._next_due(now)
             return frame
-        await asyncio.sleep(self._frame_time)
-        self._due = time.monotonic() + self._frame_time
+        # Sleep only what is left of the interval, so rendering a visualizer
+        # frame comes out of the budget instead of being added to it.
+        await asyncio.sleep(max(0.0, self._due - time.monotonic()))
+        self._next_due(time.monotonic())
         if self._visualize and self._meter is not None:
             return self._render_visualizer(self._meter.level)
         return _frame_from_image(self._idle_image)
+
+    def _next_due(self, now: float) -> None:
+        """Advance the deadline by whole frame intervals. Restarting it from now
+        would fold each overshoot into the next interval, which quietly cost a
+        third of the frame rate."""
+        self._due += self._frame_time
+        if self._due <= now:
+            self._due = now + self._frame_time
 
     async def _from_source(self) -> av.VideoFrame | None:
         source = self._source
