@@ -89,15 +89,17 @@ class FallbackShow:
         logger.info("fallback set to movie %s", movie.name)
         return self.status()
 
-    def set_radio(self, url: str) -> str:
+    def set_radio(self, url: str, *, hold: bool = True) -> str:
         """Play a live radio stream when idle. It has no video, so the loop shows
-        a visualizer; it never ends, so the cursor/advance machinery is unused."""
+        a visualizer; it never ends, so the cursor/advance machinery is unused.
+        The boot default passes hold=False so it fills dead air without keeping
+        the automation queue off the channel for good."""
         self._episodes = []
         self._series = ""
         self._is_movie = False
         self._cursor = 0
         self._radio_url = url
-        self._held = True
+        self._held = hold
         logger.info("fallback set to radio %s", url)
         return self.status()
 

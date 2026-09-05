@@ -234,6 +234,16 @@ async def test_a_chosen_show_outranks_automation_until_it_is_released():
     assert _title(fb) == "queued clip"
 
 
+def test_boot_radio_steps_aside_for_automation():
+    # RADIO_URL only fills dead air on a fresh start; it must not lock the
+    # automation queue off the channel for the life of the process.
+    fb = _fallback()
+    fb.set_radio("https://radio.h4ks.com/radio", hold=False)
+    assert _title(fb) == "📻 radio.h4ks.com"
+    fb.set_external([Resolved("https://s3/one.mp4", "queued clip")])
+    assert _title(fb) == "queued clip"
+
+
 def test_radio_command_outranks_automation_until_it_is_released():
     fb = _fallback()
     fb.set_external([Resolved("https://s3/one.mp3", "queued song")])
