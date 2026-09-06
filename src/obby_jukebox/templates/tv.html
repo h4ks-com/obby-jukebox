@@ -30,6 +30,8 @@
     .stage-bar { align-items: center; background: var(--panel); border-top: 2px solid var(--orange);
       display: flex; gap: 1rem; justify-content: space-between; padding: .7rem 1rem; }
     .live { color: var(--orange); font: bold .78rem 'Courier New', monospace; letter-spacing: .12em; }
+    #sound { background: var(--orange); border: 0; color: #11131c; cursor: pointer;
+      font: bold .78rem 'Courier New', monospace; padding: .35rem .8rem; }
     .offline { color: var(--dim); }
     .info { display: grid; gap: 2rem; grid-template-columns: 2fr 1fr; }
     .panel { background: var(--panel); border: 1px solid var(--border); padding: 1rem; }
@@ -59,6 +61,7 @@
     <section class="stage">
       <video id="video" controls autoplay playsinline></video>
       <div class="stage-bar"><span id="status" class="offline">connecting…</span>
+        <button id="sound" type="button" hidden>turn the sound on</button>
         <strong id="now">nothing on air</strong></div>
     </section>
     <div class="info">
@@ -76,12 +79,33 @@
     const video = document.getElementById('video');
     const status = document.getElementById('status');
     const now = document.getElementById('now');
+    const sound = document.getElementById('sound');
     const queuesSection = document.getElementById('queues-section');
     const onDemandCard = document.getElementById('ondemand-card');
     const onDemandQueue = document.getElementById('ondemand-queue');
     const fallbackCard = document.getElementById('fallback-card');
     const fallbackQueue = document.getElementById('fallback-queue');
     let viewer;
+
+    // Browsers refuse to autoplay a channel with sound until the viewer has
+    // interacted with the site, and the refusal is silent — the tile just sits
+    // black. Fall back to a muted start so the picture always runs; the native
+    // controls carry the unmute, and the first click restores sound.
+    async function start() {
+      try {
+        await video.play();
+      } catch {
+        video.muted = true;
+        sound.hidden = false;
+        await video.play().catch(() => {});
+      }
+    }
+
+    function unmute() {
+      video.muted = false;
+      sound.hidden = true;
+      video.play().catch(() => {});
+    }
 
     // An empty queue is shown as nothing at all, card and section included.
     function renderList(card, element, entries) {
@@ -145,7 +169,7 @@
           if (signal.type === 'joined' && !joined) {
             joined = true; pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}, ...(signal.turn ? [{urls: signal.turn.urls, username: signal.turn.username, credential: signal.turn.password}] : [])]});
             pc.addTransceiver('audio', {direction: 'recvonly'}); pc.addTransceiver('video', {direction: 'recvonly'});
-            pc.ontrack = (event) => { if (event.streams[0]) video.srcObject = event.streams[0]; status.textContent = '● LIVE'; status.className = 'live'; video.play().catch(() => {}); };
+            pc.ontrack = (event) => { if (event.streams[0]) video.srcObject = event.streams[0]; status.textContent = '● LIVE'; status.className = 'live'; start(); };
             pc.onicecandidate = (event) => { if (event.candidate) sendSignal(socket, {type: 'ice', cand: event.candidate.candidate, mid: event.candidate.sdpMid, mlineidx: event.candidate.sdpMLineIndex}); };
             pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' || pc.connectionState === 'closed') viewer?.close(); };
             await pc.setLocalDescription(await pc.createOffer()); sendSignal(socket, {type: 'offer', sdp: pc.localDescription.sdp});
@@ -196,6 +220,7 @@
       }
       setTimeout(poll, 5000);
     }
+    sound.addEventListener('click', unmute);
     poll();
   </script>
 </body>

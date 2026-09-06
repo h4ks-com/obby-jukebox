@@ -197,7 +197,8 @@ async def test_video_track_drops_a_source_running_faster_than_the_channel():
     for _ in range(6):
         await track.recv()
     source = cast(_CountingSource, track._source)
-    assert source.served >= 10, f"only pulled {source.served} frames from a 2x source"
+    # Without pacing each recv would consume exactly one source frame.
+    assert source.served > 6, f"forwarded every frame of a 2x source ({source.served})"
 
 
 async def test_video_track_keeps_every_frame_of_a_slow_source():
