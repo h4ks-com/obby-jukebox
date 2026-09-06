@@ -175,7 +175,9 @@ def create_app(
     @app.get("/", include_in_schema=False)
     @app.get("/tv", include_in_schema=False)
     def tv_page() -> FileResponse:
-        return FileResponse(_TV_TEMPLATE)
+        # Revalidate every load: the page carries the player itself, and a
+        # cached copy leaves viewers on an old one long after a deploy.
+        return FileResponse(_TV_TEMPLATE, headers={"Cache-Control": "no-cache"})
 
     @app.put("/fallback", dependencies=[Depends(auth)])
     def set_fallback(req: FallbackRequest) -> FallbackUpdate:
